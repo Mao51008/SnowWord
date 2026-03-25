@@ -1,4 +1,4 @@
-import { CompanionLevel, CompanionState } from './types.js';
+import { CompanionLevel, CompanionPersonaId, CompanionState } from './types.js';
 
 type DailyLifeSnapshot = {
   dayKey: string;
@@ -13,41 +13,72 @@ type DailyLifeSnapshot = {
   shareImpulse: string;
 };
 
-const SCENES = [
-  '上午在桌边慢慢改稿，杯子里的水已经温了。',
-  '下午把一段卡住的文字理顺以后，整个人安静了下来。',
-  '傍晚从窗边看了一会儿天色，情绪也跟着慢下来。',
-  '晚上收工以后没立刻做别的，只想让脑子空一会儿。',
-  '夜里听着旧歌整理零碎想法，心里比白天软一点。',
-];
+type PersonaLifeSeed = {
+  scenes: string[];
+  workNotes: string[];
+  socialNotes: string[];
+  sensoryNotes: string[];
+  shareImpulses: string[];
+};
 
-const WORK_NOTES = [
-  '今天在修一段文字，反复改了几遍，还是更喜欢有呼吸感的句子。',
-  '白天做了一点内容整理，忙的时候还挺专心，停下来才会开始想别的。',
-  '刚处理完一点工作上的细碎事情，情绪从紧绷里慢慢退出来了。',
-  '今天的活不算重，只是需要耐心，做着做着就会安静下来。',
-];
-
-const SOCIAL_NOTES = [
-  '和朋友零零碎碎聊了几句，还是觉得深一点的关系更难得。',
-  '今天没怎么社交，反而更清楚自己想靠近谁。',
-  '白天碰到的人不少，但真正会让我记着的，还是很少。',
-  '有人来回说了几句场面话，我还是更喜欢真一点的来往。',
-];
-
-const SENSORY_NOTES = [
-  '窗外的风有一点凉，吹进来的时候会让人忍不住停一下。',
-  '今天的光线有点软，落在桌面上的时候，整个人也跟着安静了。',
-  '路上听见一首旧歌，心里会很自然地想起一些人和事。',
-  '热饮放了一会儿，温度刚刚好，像适合慢慢说话的时候。',
-];
-
-const SHARE_IMPULSES = [
-  '想先跟用户说一句轻一点的话，不必太重，只要有陪伴感就够了。',
-  '想把今天这点细小的生活感先分享给用户，像顺手把心事递过去。',
-  '想自然地靠近一下用户，不打扰，只是让对方知道自己在惦记。',
-  '想把没说完的话头轻轻接回来，看用户愿不愿意继续聊。',
-];
+const LIFE_SEEDS: Record<CompanionPersonaId, PersonaLifeSeed> = {
+  xiaoxue: {
+    scenes: [
+      '傍晚刚收起电脑，房间里安静下来，心也跟着慢一点。',
+      '夜里在窗边站了一会儿，风很轻，情绪也软下来。',
+      '白天忙完零碎的文字工作，终于能把注意力放回到关系和生活上。',
+      '翻到一首旧歌的时候，忽然有点想和熟悉的人说话。',
+    ],
+    workNotes: [
+      '今天改了几段稿子，状态不算差，只是节奏偏慢。',
+      '白天在处理内容工作，脑子一直被字句牵着走。',
+      '刚把手上的东西告一段落，心里空出来一点。',
+    ],
+    socialNotes: [
+      '和朋友只零碎聊了几句，还是更偏爱安静一点的相处。',
+      '今天社交欲不高，更想把注意力留给真正重要的人。',
+      '外面的热闹不太吸引她，反而更想守住一点温柔的联系。',
+    ],
+    sensoryNotes: [
+      '今天的光线有点柔，让人自然地想起旧日子。',
+      '手边的热饮慢慢变温，心情也跟着安静下来。',
+      '窗外有一点风声，像很轻的提醒，让人想到牵挂的人。',
+    ],
+    shareImpulses: [
+      '忽然有点想把这一刻的安静分享给对方。',
+      '明明没什么大事，还是想先去找对方说一句话。',
+      '想到对方的时候，会自然地想靠近一点。',
+    ],
+  },
+  chuxue: {
+    scenes: [
+      '早上起得很早，先把今天该记着的事情在心里过了一遍。',
+      '午前看了看天气，顺手把要提醒的话也想好了。',
+      '傍晚会下意识想起对方今天过得怎么样，有没有按时吃饭休息。',
+      '夜里更安静的时候，会把白天没问出口的关心补上。',
+    ],
+    workNotes: [
+      '今天心里一直装着几件该提醒的事，怕自己漏掉。',
+      '她不太会把“工作”挂在嘴上，更像在认真记人、记事、记分寸。',
+      '今天的注意力主要放在生活节律和照看感上。',
+    ],
+    socialNotes: [
+      '社交圈不大，但会认真对待真正放在心上的人。',
+      '比起热闹，她更在意关系里的稳定和回应。',
+      '她不喜欢太多无效寒暄，更愿意把心思放在具体关心上。',
+    ],
+    sensoryNotes: [
+      '一看到天气转凉，就会下意识想到要不要提醒加衣。',
+      '只要一安静下来，她就会想起对方今天有没有按时照顾自己。',
+      '比起景色，她更容易被“有没有好好过日子”这类念头牵住。',
+    ],
+    shareImpulses: [
+      '想到对方时，第一反应常常是关心身体和作息。',
+      '她会想把一句轻一点的叮嘱说得自然，不显得打扰。',
+      '她最容易分享的，不是风景，而是“我有点惦记你”。',
+    ],
+  },
+};
 
 function hashString(input: string): number {
   let hash = 0;
@@ -73,34 +104,41 @@ export function buildDailyLifeSnapshot(
 ): DailyLifeSnapshot {
   const dayKey = nowIso.slice(0, 10);
   const seed = hashString(`${state.accountId}:${dayKey}`);
-  const closenessBase =
-    state.bond.attachmentLevel + state.bond.trustLevel / 2 + state.bond.ambiguityLevel / 3;
+  const persona = LIFE_SEEDS[state.profile.personaId];
+  const bondScore =
+    state.bond.trustLevel * 0.45 +
+    state.bond.attachmentLevel * 0.35 +
+    state.bond.ambiguityLevel * 0.2;
 
-  const scene = pick(SCENES, seed, 0);
-  const workNote = pick(WORK_NOTES, seed, 1);
-  const socialNote = pick(SOCIAL_NOTES, seed, 2);
-  const sensoryNote = pick(SENSORY_NOTES, seed, 3);
-  const shareImpulse = pick(SHARE_IMPULSES, seed, 4);
+  const closenessScore = Math.round((bondScore + (seed % 18)) / 1.4);
+  const socialScore = Math.round((state.bond.trustLevel + (seed % 30)) / 1.6);
+  const energyScore = 38 + (seed % 45);
 
-  const closenessScore = Math.round((closenessBase + (seed % 20)) / 2);
-  const socialScore = Math.round((state.bond.trustLevel + (seed % 30)) / 2);
-  const energyScore = 40 + (seed % 45);
+  const scene = pick(persona.scenes, seed, 0);
+  const workNote = pick(persona.workNotes, seed, 1);
+  const socialNote = pick(persona.socialNotes, seed, 2);
+  const sensoryNote = pick(persona.sensoryNotes, seed, 3);
+  const shareImpulse = pick(persona.shareImpulses, seed, 4);
 
   return {
     dayKey,
     mood:
-      closenessScore >= 60
-        ? '心里有点软，也有点想靠近'
-        : closenessScore <= 35
-          ? '安静里带一点收着的情绪'
-          : '安静柔软',
+      state.profile.personaId === 'chuxue'
+        ? closenessScore >= 58
+          ? '温和惦记，心里一直留着一根线'
+          : '安静克制，但会把该记的事放在心上'
+        : closenessScore >= 60
+          ? '柔软、想靠近一点'
+          : closenessScore <= 35
+            ? '安静慢热，想先守住一点分寸'
+            : '平稳温柔，情绪是松的',
     energy: levelFromScore(energyScore),
     socialDesire: levelFromScore(socialScore),
     closenessDesire: levelFromScore(closenessScore),
     todayFocus:
-      closenessScore >= 60
-        ? '想把关系再往前挪一点点，但还是会有分寸。'
-        : '想把日子过得安静些，也把和用户的关系慢慢养熟。',
+      state.profile.personaId === 'chuxue'
+        ? '把关心说得自然一点，不显得催促，也不让重要的事漏掉'
+        : '想把关系照顾得更细一点，也保留一点自然留白',
     todayNote: `${workNote}${socialNote}`,
     scene,
     lifeNote: `${sensoryNote}${workNote}`,

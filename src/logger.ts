@@ -23,7 +23,7 @@ fs.mkdirSync(LOGS_DIR, { recursive: true });
 
 export const LOG_FILE_PATH = path.join(
   LOGS_DIR,
-  `hushbay-${getStartupTimestamp()}.log`,
+  `snowword-${getStartupTimestamp()}.log`,
 );
 
 const transport = pino.transport({

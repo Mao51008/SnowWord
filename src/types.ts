@@ -1,4 +1,4 @@
-// --- HushBay Types ---
+// --- SnowWord Types ---
 
 export interface Account {
   id: string; // bot_id, e.g. "xxx@im.bot"
@@ -20,6 +20,13 @@ export interface Memory {
   tags: string; // comma-separated
   created_at: string;
   accessed_at: string;
+}
+
+export interface AccountSettings {
+  account_id: string;
+  persona_id: CompanionPersonaId;
+  custom_persona_prompt: string;
+  updated_at: string;
 }
 
 export interface NewMessage {
@@ -76,6 +83,7 @@ export type RelationshipStage =
   | 'ambiguous_close';
 
 export type CompanionLevel = 'low' | 'medium' | 'high';
+export type CompanionPersonaId = 'xiaoxue' | 'chuxue';
 
 export type CompanionProactiveType =
   | 'checking_in'
@@ -84,6 +92,7 @@ export type CompanionProactiveType =
   | 'sharing';
 
 export interface CompanionProfile {
+  personaId: CompanionPersonaId;
   name: string;
   identity: string;
   occupation: string;

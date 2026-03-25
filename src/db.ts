@@ -5,6 +5,7 @@ import path from 'path';
 import { STORE_DIR } from './config.js';
 import {
   Account,
+  AccountSettings,
   CompanionState,
   Memory,
   NewMessage,
@@ -90,6 +91,14 @@ function createSchema(database: Database.Database): void {
     CREATE TABLE IF NOT EXISTS companion_state (
       account_id TEXT PRIMARY KEY,
       state_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (account_id) REFERENCES accounts(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS account_settings (
+      account_id TEXT PRIMARY KEY,
+      persona_id TEXT NOT NULL DEFAULT 'xiaoxue',
+      custom_persona_prompt TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL,
       FOREIGN KEY (account_id) REFERENCES accounts(id)
     );
@@ -204,6 +213,7 @@ export function deleteAccount(id: string): void {
   db.prepare('DELETE FROM messages WHERE account_id = ?').run(id);
   db.prepare('DELETE FROM scheduled_tasks WHERE account_id = ?').run(id);
   db.prepare('DELETE FROM companion_state WHERE account_id = ?').run(id);
+  db.prepare('DELETE FROM account_settings WHERE account_id = ?').run(id);
   db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
 }
 
@@ -274,6 +284,11 @@ export function deleteMemory(id: number): void {
   db.prepare('DELETE FROM memories WHERE id = ?').run(id);
 }
 
+export function clearMemoriesForAccount(accountId: string): number {
+  const result = db.prepare('DELETE FROM memories WHERE account_id = ?').run(accountId);
+  return result.changes;
+}
+
 // =====================
 // --- Message accessors ---
 // =====================
@@ -296,6 +311,11 @@ export function storeMessage(msg: NewMessage): void {
 
 export function clearMessages(): number {
   const result = db.prepare('DELETE FROM messages').run();
+  return result.changes;
+}
+
+export function clearMessagesForAccount(accountId: string): number {
+  const result = db.prepare('DELETE FROM messages WHERE account_id = ?').run(accountId);
   return result.changes;
 }
 
@@ -429,6 +449,15 @@ export function deleteTask(id: string): void {
   db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
 }
 
+export function clearTasksForAccount(accountId: string): number {
+  db.prepare(
+    `DELETE FROM task_run_logs
+     WHERE task_id IN (SELECT id FROM scheduled_tasks WHERE account_id = ?)`,
+  ).run(accountId);
+  const result = db.prepare('DELETE FROM scheduled_tasks WHERE account_id = ?').run(accountId);
+  return result.changes;
+}
+
 export function getDueTasks(): ScheduledTask[] {
   const now = new Date().toISOString();
   return db
@@ -489,6 +518,54 @@ export function upsertCompanionState(state: CompanionState): void {
      VALUES (?, ?, ?)
      ON CONFLICT(account_id) DO UPDATE SET
        state_json = excluded.state_json,
-       updated_at = excluded.updated_at`,
+      updated_at = excluded.updated_at`,
   ).run(state.accountId, JSON.stringify(state), state.updatedAt);
+}
+
+export function clearCompanionState(accountId: string): void {
+  db.prepare('DELETE FROM companion_state WHERE account_id = ?').run(accountId);
+}
+
+export function getAccountSettings(accountId: string): AccountSettings | undefined {
+  return db
+    .prepare('SELECT * FROM account_settings WHERE account_id = ?')
+    .get(accountId) as AccountSettings | undefined;
+}
+
+export function upsertAccountSettings(
+  accountId: string,
+  updates: Partial<Pick<AccountSettings, 'persona_id' | 'custom_persona_prompt'>>,
+): AccountSettings {
+  const current =
+    getAccountSettings(accountId) ??
+    ({
+      account_id: accountId,
+      persona_id: 'xiaoxue',
+      custom_persona_prompt: '',
+      updated_at: new Date().toISOString(),
+    } satisfies AccountSettings);
+
+  const next: AccountSettings = {
+    account_id: accountId,
+    persona_id: updates.persona_id ?? current.persona_id,
+    custom_persona_prompt:
+      updates.custom_persona_prompt ?? current.custom_persona_prompt,
+    updated_at: new Date().toISOString(),
+  };
+
+  db.prepare(
+    `INSERT INTO account_settings (account_id, persona_id, custom_persona_prompt, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(account_id) DO UPDATE SET
+       persona_id = excluded.persona_id,
+       custom_persona_prompt = excluded.custom_persona_prompt,
+       updated_at = excluded.updated_at`,
+  ).run(
+    next.account_id,
+    next.persona_id,
+    next.custom_persona_prompt,
+    next.updated_at,
+  );
+
+  return next;
 }

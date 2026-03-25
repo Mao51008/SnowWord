@@ -1,5 +1,5 @@
-/**
- * HushBay Runtime - Single entry point for AI companion
+﻿/**
+ * SnowWord Runtime - Single entry point for AI companion
  *
  * Architecture:
  * - Host-local agent runtime
@@ -13,6 +13,10 @@ import { pathToFileURL } from 'url';
 
 import { DATA_DIR, STORE_DIR } from './config.js';
 import {
+  clearCompanionState,
+  clearMemoriesForAccount,
+  clearMessagesForAccount,
+  clearTasksForAccount,
   createAccount,
   deleteAccount,
   getAccount,
@@ -20,6 +24,7 @@ import {
   getRecentMessages,
   initDatabase,
   storeMessage,
+  upsertAccountSettings,
   updateAccount,
 } from './db.js';
 import {
@@ -31,7 +36,10 @@ import {
 import { runContainerAgent } from './container-runner.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { logger } from './logger.js';
-import { Account, NewMessage } from './types.js';
+import { Account, CompanionPersonaId, NewMessage } from './types.js';
+import { buildReactionPolicy } from './reaction-policy.js';
+import { extractAndPersistPersonalMemories } from './memory-extractor.js';
+import { capturePreferredNameMemory } from './user-memory.js';
 import {
   getUpdates,
   interruptPendingOutbound,
@@ -87,7 +95,7 @@ function releaseInstanceLock(): void {
 function shutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  logger.info({ signal }, 'Shutting down HushBay');
+  logger.info({ signal }, 'Shutting down SnowWord');
   releaseInstanceLock();
   process.exit(0);
 }
@@ -105,12 +113,12 @@ function acquireInstanceLock(): void {
         try {
           process.kill(existingPid, 0);
           throw new Error(
-            `Another HushBay instance is already running (pid=${existingPid}, started_at=${lock.started_at ?? 'unknown'}, lock_file=${INSTANCE_LOCK_PATH})`,
+            `Another SnowWord instance is already running (pid=${existingPid}, started_at=${lock.started_at ?? 'unknown'}, lock_file=${INSTANCE_LOCK_PATH})`,
           );
         } catch (err) {
           if (
             err instanceof Error &&
-            err.message.startsWith('Another HushBay instance is already running')
+            err.message.startsWith('Another SnowWord instance is already running')
           ) {
             throw err;
           }
@@ -119,7 +127,7 @@ function acquireInstanceLock(): void {
     } catch (err) {
       if (
         err instanceof Error &&
-        err.message.startsWith('Another HushBay instance is already running')
+        err.message.startsWith('Another SnowWord instance is already running')
       ) {
         throw err;
       }
@@ -185,29 +193,201 @@ function ensureDirectories(accountId: string): void {
   }
 }
 
+function clearConversationBuffersForAccount(accountId: string): void {
+  for (const [key, buffer] of conversationBuffers.entries()) {
+    if (!key.startsWith(`${accountId}:`)) continue;
+    if (buffer.timer) clearTimeout(buffer.timer);
+    conversationBuffers.delete(key);
+  }
+}
+
+function clearSoulMemory(accountId: string): void {
+  const soulPath = getSoulPath(accountId);
+  fs.mkdirSync(path.dirname(soulPath), { recursive: true });
+  fs.writeFileSync(soulPath, '', 'utf-8');
+}
+
+function normalizePersonaInput(raw: string): CompanionPersonaId | null {
+  const value = raw.trim().toLowerCase();
+  if (['xiaoxue', '小雪'].includes(value)) return 'xiaoxue';
+  if (['chuxue', '初雪'].includes(value)) return 'chuxue';
+  return null;
+}
+
+async function sendCommandReply(params: {
+  account: Account;
+  to: string;
+  text: string;
+  contextToken?: string;
+}): Promise<void> {
+  await ilinkSendMessage(
+    {
+      id: params.account.id,
+      bot_token: params.account.bot_token,
+      base_url: params.account.base_url,
+    },
+    params.to,
+    params.text,
+    params.contextToken,
+  );
+}
+
+async function handleSlashCommand(params: {
+  account: Account;
+  sender: string;
+  content: string;
+  contextToken?: string;
+}): Promise<boolean> {
+  const raw = params.content.trim();
+  if (!raw.startsWith('/')) return false;
+
+  interruptPendingOutbound(params.account.id, params.sender);
+  clearConversationBuffersForAccount(params.account.id);
+
+  const [command, ...rest] = raw.split(/\s+/);
+  const argument = rest.join(' ').trim();
+
+  switch (command.toLowerCase()) {
+    case '/persona':
+    case '/切换人格': {
+      const personaId = normalizePersonaInput(argument);
+      if (!personaId) {
+        await sendCommandReply({
+          account: params.account,
+          to: params.sender,
+          contextToken: params.contextToken,
+          text: '人格切换失败。可用值：/切换人格 小雪 或 /切换人格 初雪',
+        });
+        return true;
+      }
+
+      upsertAccountSettings(params.account.id, { persona_id: personaId });
+      const nextState = ensureCompanionState(params.account);
+      saveCompanionState(nextState);
+      await sendCommandReply({
+        account: params.account,
+        to: params.sender,
+        contextToken: params.contextToken,
+        text: `已切换到${nextState.profile.name}人格。`,
+      });
+      return true;
+    }
+
+    case '/clear-memory':
+    case '/清除记忆': {
+      const cleared = clearMemoriesForAccount(params.account.id);
+      clearSoulMemory(params.account.id);
+      await sendCommandReply({
+        account: params.account,
+        to: params.sender,
+        contextToken: params.contextToken,
+        text: `已清除记忆，共删除 ${cleared} 条。`,
+      });
+      return true;
+    }
+
+    case '/clear-history':
+    case '/清除历史对话': {
+      const cleared = clearMessagesForAccount(params.account.id);
+      await sendCommandReply({
+        account: params.account,
+        to: params.sender,
+        contextToken: params.contextToken,
+        text: `已清除历史对话，共删除 ${cleared} 条。`,
+      });
+      return true;
+    }
+
+    case '/clear-schedule':
+    case '/清除日程': {
+      const cleared = clearTasksForAccount(params.account.id);
+      await sendCommandReply({
+        account: params.account,
+        to: params.sender,
+        contextToken: params.contextToken,
+        text: `已清除日程，共删除 ${cleared} 条。`,
+      });
+      return true;
+    }
+
+    case '/clear-all':
+    case '/清除所有': {
+      const memoryCount = clearMemoriesForAccount(params.account.id);
+      const messageCount = clearMessagesForAccount(params.account.id);
+      const taskCount = clearTasksForAccount(params.account.id);
+      clearCompanionState(params.account.id);
+      clearSoulMemory(params.account.id);
+      await sendCommandReply({
+        account: params.account,
+        to: params.sender,
+        contextToken: params.contextToken,
+        text:
+          `已清除全部数据：记忆 ${memoryCount} 条、历史 ${messageCount} 条、日程 ${taskCount} 条。` +
+          '账号绑定和人格设置已保留。',
+      });
+      return true;
+    }
+
+    case '/persona-prompt':
+    case '/自定义人格提示词': {
+      upsertAccountSettings(params.account.id, {
+        custom_persona_prompt: argument,
+      });
+      await sendCommandReply({
+        account: params.account,
+        to: params.sender,
+        contextToken: params.contextToken,
+        text: argument
+          ? '已保存自定义人格提示词。目前接口已预留，暂未接入实际 prompt。'
+          : '已清空自定义人格提示词。目前接口已预留，暂未接入实际 prompt。',
+      });
+      return true;
+    }
+
+    default: {
+      await sendCommandReply({
+        account: params.account,
+        to: params.sender,
+        contextToken: params.contextToken,
+        text:
+          '未识别的命令。可用命令：/切换人格、/清除记忆、/清除历史对话、/清除日程、/清除所有、/自定义人格提示词',
+      });
+      return true;
+    }
+  }
+}
+
 function buildConversationPrompt(params: {
   account: Account;
+  companionName?: string;
   recentContext: string;
   soulContent: string;
   companionContext: string;
   latestUserMessage: string;
+  replyPolicy?: string;
   interruptionNote?: string;
+  isFirstContact?: boolean;
 }): string {
   const recentContext = params.recentContext || '暂无';
   const soulContent = params.soulContent || '暂无';
+  const companionName = params.companionName ?? '小雪';
+  const firstContactRequirement = `## 首次对话要求
+这是你和用户的第一次正式对话。开场时先自然介绍自己叫${companionName}，表达“很高兴认识你”，再主动问一句“我应该怎么称呼你呀？”。不要介绍自己的工作，也不要做过长的自我说明。如果用户第一句话本身带有具体内容，要先顺着对方的话回应，再自然完成这段自我介绍。`;
 
   const sections = [
-    `你正在和微信用户进行一对一聊天。请始终以 ${params.account.name} / 小雪 的身份回复。`,
+    `你正在和微信用户进行一对一聊天。请始终以 ${params.account.name} / ${companionName} 的身份回复。`,
+    params.isFirstContact ? firstContactRequirement : null,
     params.companionContext,
+    params.replyPolicy ? `## 回复策略\n${params.replyPolicy}` : null,
     '## 用户长期记忆',
     soulContent,
     '## 近期对话',
     recentContext,
     '## 用户刚刚发来的消息',
-    params.interruptionNote ? '## Interrupted Reply Context' : null,
+    params.interruptionNote ? '## 被打断的上一轮回复' : null,
     params.interruptionNote ?? null,
     params.latestUserMessage,
-    '请直接给出要发送给用户的自然中文回复，不要解释系统、状态或技术细节。',
+    '请直接给出要发送给用户的自然中文回复，优先像真人在聊天，不要模板化，不要解释系统或技术细节。',
   ].filter(Boolean);
 
   return sections.join('\n\n');
@@ -245,6 +425,16 @@ async function processWeixinMessage(
 
   const { content, sender, sender_name } = parsed;
   const companionState = ensureCompanionState(account);
+  const preferredNameCapture = capturePreferredNameMemory({
+    account,
+    latestUserMessage: content,
+  });
+  if (preferredNameCapture) {
+    log.info(
+      { msg_id: msgId, preferred_name: preferredNameCapture.preferredName },
+      'Captured preferred name into memory',
+    );
+  }
 
   log.info(
     {
@@ -252,6 +442,7 @@ async function processWeixinMessage(
       from: sender,
       content_length: content.length,
       content_preview: previewText(content, 500),
+      preferred_name_capture: preferredNameCapture?.preferredName ?? null,
     },
     'Parsed inbound message content',
   );
@@ -285,10 +476,16 @@ async function processWeixinMessage(
 
   const prompt = buildConversationPrompt({
     account,
+    companionName: companionState.profile.name,
     recentContext: contextLines,
     soulContent,
     companionContext: renderCompanionStateForPrompt(companionState),
     latestUserMessage: content,
+    replyPolicy: (() => {
+      const policy = buildReactionPolicy(companionState, content);
+      return `当前场景：${policy.label}\n默认优先短回复。\n本轮总字数尽量不超过 ${policy.maxReplyChars} 个字。\n${policy.guidance}`;
+    })(),
+    isFirstContact: recentMsgs.length <= 1,
   });
 
   log.info(
@@ -309,6 +506,7 @@ async function processWeixinMessage(
       prompt,
       sessionId: undefined,
       latestUserMessage: content,
+      personaId: companionState.profile.personaId,
     });
 
     log.info(
@@ -380,6 +578,17 @@ async function processWeixinMessage(
       is_bot_message: true,
     };
     storeMessage(botMsg);
+
+    const memoryExtraction = await extractAndPersistPersonalMemories({
+      account,
+      latestUserMessage: content,
+      assistantMessage: response,
+      recentContext: contextLines,
+    });
+    log.info(
+      { msg_id: msgId, ...memoryExtraction },
+      'Persisted personal memories from turn',
+    );
 
     const nextCompanionState = updateCompanionStateAfterTurn({
       state: companionState,
@@ -454,11 +663,17 @@ async function flushConversationBuffer(key: string): Promise<void> {
 
   const prompt = buildConversationPrompt({
     account,
+    companionName: companionState.profile.name,
     recentContext: contextLines,
     soulContent,
     companionContext: renderCompanionStateForPrompt(companionState),
     latestUserMessage: mergedUserMessage,
+    replyPolicy: (() => {
+      const policy = buildReactionPolicy(companionState, mergedUserMessage);
+      return `当前场景：${policy.label}\n默认优先短回复。\n本轮总字数尽量不超过 ${policy.maxReplyChars} 个字。\n${policy.guidance}`;
+    })(),
     interruptionNote,
+    isFirstContact: recentMsgs.length <= batch.length,
   });
 
   log.info(
@@ -479,6 +694,7 @@ async function flushConversationBuffer(key: string): Promise<void> {
       prompt,
       sessionId: undefined,
       latestUserMessage: mergedUserMessage,
+      personaId: companionState.profile.personaId,
     });
 
     log.info(
@@ -565,6 +781,17 @@ async function flushConversationBuffer(key: string): Promise<void> {
     };
     storeMessage(botMsg);
 
+    const memoryExtraction = await extractAndPersistPersonalMemories({
+      account,
+      latestUserMessage: mergedUserMessage,
+      assistantMessage: response,
+      recentContext: contextLines,
+    });
+    log.info(
+      { first_msg_id: firstMsgId, ...memoryExtraction },
+      'Persisted personal memories from merged turn',
+    );
+
     const nextCompanionState = updateCompanionStateAfterTurn({
       state: companionState,
       userMessage: mergedUserMessage,
@@ -584,10 +811,10 @@ async function flushConversationBuffer(key: string): Promise<void> {
   }
 }
 
-function enqueueWeixinMessage(
+async function enqueueWeixinMessage(
   account: Account,
   msg: import('./ilink.js').WeixinMessage,
-): void {
+): Promise<void> {
   const log = logger.child({ accountId: account.id });
   const msgId = String(msg.message_id ?? `msg-${Date.now()}`);
 
@@ -615,7 +842,29 @@ function enqueueWeixinMessage(
     ? new Date(msg.create_time_ms).toISOString()
     : new Date().toISOString();
 
+  if (
+    await handleSlashCommand({
+      account,
+      sender,
+      content,
+      contextToken: msg.context_token,
+    })
+  ) {
+    log.info({ msg_id: msgId, sender, command: content }, 'Handled slash command');
+    return;
+  }
+
   const interruptedPendingReply = interruptPendingOutbound(account.id, sender);
+  const preferredNameCapture = capturePreferredNameMemory({
+    account,
+    latestUserMessage: content,
+  });
+  if (preferredNameCapture) {
+    log.info(
+      { msg_id: msgId, preferred_name: preferredNameCapture.preferredName },
+      'Captured preferred name into memory',
+    );
+  }
 
   log.info(
     {
@@ -623,6 +872,7 @@ function enqueueWeixinMessage(
       from: sender,
       content_length: content.length,
       content_preview: previewText(content, 500),
+      preferred_name_capture: preferredNameCapture?.preferredName ?? null,
     },
     'Parsed inbound message content',
   );
@@ -831,7 +1081,7 @@ function sleep(ms: number): Promise<void> {
 // =====================
 
 export async function main(): Promise<void> {
-  logger.info('HushBay starting...');
+  logger.info('SnowWord starting...');
 
   await ensureRuntimeReady();
 
@@ -859,7 +1109,7 @@ export async function main(): Promise<void> {
 
   startSchedulerLoop();
 
-  logger.info('HushBay running');
+  logger.info('SnowWord running');
 }
 
 const isDirectRun =
@@ -870,11 +1120,11 @@ if (isDirectRun) {
   main().catch((err) => {
     if (
       err instanceof Error &&
-      err.message.startsWith('Another HushBay instance is already running')
+      err.message.startsWith('Another SnowWord instance is already running')
     ) {
-      logger.error({ err }, 'Refusing to start a second HushBay instance');
+      logger.error({ err }, 'Refusing to start a second SnowWord instance');
       console.error(
-        '\nHushBay is already running.\n' +
+        '\nSnowWord is already running.\n' +
           `Lock file: ${INSTANCE_LOCK_PATH}\n` +
           'Stop the existing process or remove the stale lock file if that process is gone.\n',
       );
@@ -886,3 +1136,4 @@ if (isDirectRun) {
     process.exit(1);
   });
 }
+

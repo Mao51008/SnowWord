@@ -1,5 +1,5 @@
 /**
- * HushBay iLink API Client
+ * SnowWord iLink API Client
  *
  * Implements the Tencent iLink Bot Protocol for WeChat messaging.
  * API base: https://ilinkai.weixin.qq.com
@@ -134,24 +134,27 @@ function splitOutboundText(text: string): string[] {
   for (const part of sentenceParts) {
     if (!part) continue;
     const last = merged[merged.length - 1];
-    if (last && last.length < 10) {
+    if (last && last.length < 10 && last.length + part.length <= 40) {
       merged[merged.length - 1] = `${last}${part}`;
     } else {
-      merged.push(part);
+      let remaining = part;
+      while (remaining.length > 40) {
+        merged.push(remaining.slice(0, 40).trim());
+        remaining = remaining.slice(40).trim();
+      }
+      if (remaining) {
+        merged.push(remaining);
+      }
     }
   }
-
-  if (merged.length <= 3) {
-    return merged;
-  }
-
-  return [merged[0], merged[1], merged.slice(2).join(' ')];
+  return merged;
 }
 
 function computeTypingDelayMs(text: string): number {
   const normalizedLength = text.replace(/\s+/g, '').length;
-  const estimated = (500 + normalizedLength * 90) * 10;
-  return Math.max(5000, Math.min(15000, estimated));
+  if (normalizedLength <= 10) return 3000;
+  const estimated = 3000 + (normalizedLength - 10) * 140;
+  return Math.min(7000, estimated);
 }
 
 function getOutboundKey(accountId: string, toUserId: string): string {
@@ -442,7 +445,7 @@ export async function sendMessage(
       }
 
       const part = outgoing[index];
-      const clientId = `hushbay-${crypto.randomUUID()}`;
+      const clientId = `snowword-${crypto.randomUUID()}`;
       lastClientId = clientId;
 
       logger.info(
@@ -558,7 +561,7 @@ export async function sendMessage(
 }
 
 /**
- * Convert iLink WeixinMessage to HushBay NewMessage format.
+ * Convert iLink WeixinMessage to SnowWord NewMessage format.
  * Extracts text content from item_list.
  */
 export function parseWeixinMessage(

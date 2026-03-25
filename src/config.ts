@@ -9,6 +9,7 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'ANTHROPIC_MODEL',
+  'COMPANION_PERSONA',
   'OPENAI_MODEL',
 ]);
 
@@ -81,3 +82,6 @@ export const AGENT_MODEL =
   process.env.ANTHROPIC_MODEL ||
   envConfig.ANTHROPIC_MODEL ||
   'gpt-4o';
+
+export const COMPANION_PERSONA =
+  process.env.COMPANION_PERSONA || envConfig.COMPANION_PERSONA || 'xiaoxue';

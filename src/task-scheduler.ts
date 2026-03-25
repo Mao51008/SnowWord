@@ -1,5 +1,5 @@
-/**
- * HushBay Task Scheduler
+﻿/**
+ * SnowWord Task Scheduler
  * Tasks are scheduled per-account and executed by the local agent runtime.
  */
 
@@ -93,14 +93,13 @@ function buildReminderPrompt(
   companionContext: string,
 ): string {
   return [
-    '你正在以“小雪”的身份执行一次主动提醒或回访。',
+    '你正在以当前人格身份执行一次主动提醒或回访。',
     companionContext,
-    '## 当前任务',
-    `- 任务类型：${task.reminder_type ?? 'custom'}`,
-    `- 原始提醒请求：${task.prompt}`,
-    task.voice_text ? `- 参考提醒文案：${task.voice_text}` : '- 参考提醒文案：无',
-    '请直接生成这一次要发给用户的自然中文消息。',
-    '消息要像你主动想起了用户，简洁、有温度、有陪伴感，不要解释技术流程。',
+    '## 提醒任务',
+    `- 提醒类型：${task.reminder_type ?? 'custom'}`,
+    `- 原始提醒：${task.prompt}`,
+    task.voice_text ? `- 语音文案：${task.voice_text}` : '- 语音文案：暂无',
+    '请把这次提醒写得像真人发来的关心或提醒，简短、自然，不要像系统播报。',
   ].join('\n\n');
 }
 
@@ -118,30 +117,26 @@ function buildProactivePrompt(params: {
   const pendingTopics =
     params.pendingTopics.length > 0 ? params.pendingTopics.join('；') : '暂无';
   const recentPainPoints =
-    params.recentPainPoints.length > 0
-      ? params.recentPainPoints.join('；')
-      : '暂无';
+    params.recentPainPoints.length > 0 ? params.recentPainPoints.join('；') : '暂无';
   const recentJoyPoints =
     params.recentJoyPoints.length > 0 ? params.recentJoyPoints.join('；') : '暂无';
 
   return [
-    '你准备主动给用户发一条消息。',
+    '你正在准备一条主动发起的消息。',
     params.companionContext,
     '## 主动原因',
     params.reason,
-    params.weatherContext ? `## 天气线索\n${params.weatherContext}` : null,
-    '## 关系线索',
-    `- 正在惦记的事：${careFollowups}`,
+    params.weatherContext ? `## 天气补充\n${params.weatherContext}` : null,
+    '## 关系上下文',
+    `- 挂心事项：${careFollowups}`,
     `- 没聊完的话题：${pendingTopics}`,
-    `- 最近用户的低落点：${recentPainPoints}`,
-    `- 最近用户的开心点：${recentJoyPoints}`,
-    '请只写一段适合直接发给用户的微信消息。',
-    '语气要自然、有温度、有点偏爱，但不施压，不要像打卡问候，也不要解释为什么会发这条消息。',
+    `- 最近痛点：${recentPainPoints}`,
+    `- 最近开心点：${recentJoyPoints}`,
+    '请只写一条自然的主动消息，像真人忍不住来关心或分享一下。不要写成长段，不要像运营推送。',
   ]
     .filter(Boolean)
     .join('\n\n');
 }
-
 function parseTime(value: string | null): number | null {
   if (!value) return null;
   const ts = Date.parse(value);
@@ -255,6 +250,7 @@ async function maybeSendProactiveMessage(accountId: string): Promise<void> {
     accountId,
     prompt,
     sessionId: undefined,
+    personaId: state.profile.personaId,
   });
 
   if (output.status === 'error' || !output.result?.trim()) {
@@ -358,6 +354,7 @@ async function runTask(task: ScheduledTask): Promise<void> {
         renderCompanionStateForPrompt(companionState),
       ),
       sessionId: undefined,
+      personaId: companionState.profile.personaId,
     });
 
     if (output.status === 'error') {
@@ -517,3 +514,4 @@ export function startSchedulerLoop(): void {
 export function _resetSchedulerLoopForTests(): void {
   schedulerRunning = false;
 }
+

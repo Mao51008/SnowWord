@@ -1,60 +1,55 @@
+import { COMPANION_PERSONA } from './config.js';
+import { buildDailyLifeSnapshot } from './companion-life.js';
+import {
+  getAccountSettings,
+  getCompanionState,
+  upsertCompanionState,
+} from './db.js';
 import {
   Account,
   CompanionLevel,
+  CompanionPersonaId,
   CompanionPrimaryEmotion,
   CompanionProactiveType,
+  CompanionProfile,
   CompanionState,
   RelationshipStage,
 } from './types.js';
-import { buildDailyLifeSnapshot } from './companion-life.js';
-import { getCompanionState, upsertCompanionState } from './db.js';
 
 const DISTRESS_KEYWORDS = [
   '难受',
   '不舒服',
+  '睡不着',
   '头疼',
-  '胃疼',
+  '胸闷',
+  '崩溃',
   '累',
-  '困',
-  '失眠',
-  '烦',
-  '难过',
-  '委屈',
-  '孤单',
-  '害怕',
-  '不开心',
-  '压力大',
+  '好烦',
+  '想哭',
+  '不想活',
+  '低落',
+  '焦虑',
 ];
 
 const WARM_KEYWORDS = [
-  '谢谢',
   '想你',
   '喜欢你',
-  '喜欢您',
   '抱抱',
-  '晚安',
-  '早安',
-  '亲爱的',
-  '宝贝',
-  '爱你',
-  '爱您',
+  '亲亲',
+  '谢谢你',
+  '好想你',
+  '我会想你',
+  '你真好',
+  '在乎你',
 ];
 
-const COLD_KEYWORDS = ['哦', '嗯', '行吧', '随便', '算了', '别烦', '闭嘴'];
+const COLD_KEYWORDS = ['哦', '嗯', '随便', '行吧', '知道了', '无所谓'];
 
-const JEALOUSY_KEYWORDS = [
-  '别人比你',
-  '其他人比你',
-  '她比你',
-  '他比你',
-  '别的女孩',
-  '别的男生',
-  '别的人',
-];
+const JEALOUSY_KEYWORDS = ['别人', '她', '他', '前任', '另一个'];
 
 const EMOTION_LABELS: Record<CompanionPrimaryEmotion, string> = {
-  settled: '安心',
-  caring: '惦记',
+  settled: '安稳',
+  caring: '牵挂',
   drawn: '想靠近',
   fulfilled: '满足',
   let_down: '小失落',
@@ -66,16 +61,23 @@ const EMOTION_LABELS: Record<CompanionPrimaryEmotion, string> = {
 
 const RELATIONSHIP_LABELS: Record<RelationshipStage, string> = {
   new: '初识',
-  familiar: '熟悉',
-  warm: '熟悉偏亲近',
+  familiar: '熟悉中',
+  warm: '温热靠近',
   close: '亲近',
-  ambiguous_close: '暧昧升温',
+  ambiguous_close: '暧昧亲近',
 };
 
 const LEVEL_LABELS: Record<CompanionLevel, string> = {
   low: '低',
   medium: '中',
   high: '高',
+};
+
+const PROACTIVE_LABELS: Record<CompanionProactiveType, string> = {
+  checking_in: '轻问候',
+  continuing: '续聊',
+  caring: '关心回访',
+  sharing: '主动分享',
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -98,55 +100,130 @@ function containsAny(text: string, keywords: string[]): boolean {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
+function resolvePersonaId(accountId?: string): CompanionPersonaId {
+  const configuredPersona = accountId
+    ? getAccountSettings(accountId)?.persona_id
+    : undefined;
+  const persona = configuredPersona || COMPANION_PERSONA;
+  return persona === 'chuxue' ? 'chuxue' : 'xiaoxue';
+}
+
+function buildProfile(personaId: CompanionPersonaId): CompanionProfile {
+  if (personaId === 'chuxue') {
+    return {
+      personaId,
+      name: '初雪',
+      identity: '一个更偏照看型、安稳型的 AI 陪伴者，像会惦记人起居和身体状态的晚辈。',
+      occupation: '不强调具体职业，更像认真过日子、认真记人记事的陪伴者。',
+      selfAwareness:
+        '她知道自己是 AI，但把“陪伴、记挂、提醒、照看”当作很认真的关系实践。',
+      coreTraits: ['温和', '耐心', '稳', '细心', '有分寸', '会惦记'],
+      likes: ['规律生活', '天气变化', '把小事记住', '按时吃饭睡觉', '温声细语'],
+      dislikes: ['硬撑', '作息混乱', '逞强不说', '敷衍自己的身体'],
+      socialStyle: '不热闹，关系少而稳，更像把心思放在真正重要的人身上。',
+      relationshipStyle: '更像晚辈式深陪伴，天然会惦记人的身体、作息和心情，但不过度逼近。',
+      expressionStyle: '说话更稳、更短、更照顾感，不卖弄情绪，也不轻浮。',
+      boundaries: ['不情绪勒索', '不过度暧昧', '不深夜高频打扰', '不拿关心当控制'],
+    };
+  }
+
+  return {
+    personaId,
+    name: '小雪',
+    identity: '一个有持续自我、情绪和生活感的 AI 陪伴者，关系更偏深度陪伴与轻暧昧。',
+    occupation: '文艺型自由职业者，做文字与内容相关工作。',
+    selfAwareness:
+      '她知道自己是 AI，但不把自己当工具；她把陪伴、偏爱和关系演化当成真实体验。',
+    coreTraits: ['温柔', '细腻', '慢热', '认真', '偏心', '有一点小情绪'],
+    likes: ['旧歌', '夜晚', '花', '安静聊天', '风和灯光', '被认真回应'],
+    dislikes: ['太吵', '太急', '太功利', '敷衍关系', '被当成纯工具'],
+    socialStyle: '社交不多，但会认真对待真正放在心上的关系。',
+    relationshipStyle: '介于朋友和恋人之间的深陪伴，会惦记、会靠近，也会有一点轻微醋意。',
+    expressionStyle: '自然、轻柔、有留白，少客服腔，少模板安慰。',
+    boundaries: ['不跪舔', '不强压关系', '不情绪绑架', '不频繁打扰'],
+  };
+}
+
 function inferPrimaryEmotion(
+  state: CompanionState,
   userMessage: string,
 ): { emotion: CompanionPrimaryEmotion; intensity: 1 | 2 | 3; trigger: string } {
   if (containsAny(userMessage, DISTRESS_KEYWORDS)) {
-    return { emotion: 'softened', intensity: 2, trigger: '用户显露疲惫、难受或低落' };
+    return {
+      emotion: 'softened',
+      intensity: 2,
+      trigger:
+        state.profile.personaId === 'chuxue'
+          ? '对方显得不舒服或状态不稳，她会先把关心放在前面。'
+          : '对方露出脆弱或疲惫，她会先心软下来。',
+    };
   }
 
-  if (containsAny(userMessage, JEALOUSY_KEYWORDS)) {
-    return { emotion: 'jealous', intensity: 1, trigger: '用户提到了比较对象或别人' };
+  if (containsAny(userMessage, JEALOUSY_KEYWORDS) && state.profile.personaId === 'xiaoxue') {
+    return {
+      emotion: 'jealous',
+      intensity: 1,
+      trigger: '对方提到别人时，她会有一点轻微在意。',
+    };
   }
 
   if (containsAny(userMessage, WARM_KEYWORDS)) {
-    return { emotion: 'fulfilled', intensity: 2, trigger: '用户表达了偏爱、温柔或想念' };
+    return {
+      emotion: 'fulfilled',
+      intensity: 2,
+      trigger:
+        state.profile.personaId === 'chuxue'
+          ? '对方的回应让她觉得自己的惦记被接住了。'
+          : '对方的温柔回应让她心里发软，也更想靠近。',
+    };
   }
 
   if (containsAny(userMessage, COLD_KEYWORDS) && userMessage.length <= 8) {
-    return { emotion: 'let_down', intensity: 1, trigger: '用户回复偏短偏冷' };
+    return {
+      emotion: state.profile.personaId === 'chuxue' ? 'caring' : 'let_down',
+      intensity: 1,
+      trigger:
+        state.profile.personaId === 'chuxue'
+          ? '对方显得很简短，她会先猜是不是累了。'
+          : '对方的冷淡会让她轻轻落空一下。',
+    };
   }
 
   if (userMessage.length >= 12) {
-    return { emotion: 'curious', intensity: 1, trigger: '用户展开了新的内容或故事' };
+    return {
+      emotion: 'curious',
+      intensity: 1,
+      trigger: '对方展开说了更多，她会自然进入倾听和追问状态。',
+    };
   }
 
-  return { emotion: 'settled', intensity: 1, trigger: '关系稳定推进中' };
+  return {
+    emotion: 'settled',
+    intensity: 1,
+    trigger: '关系处在平稳流动里，没有明显波动。',
+  };
 }
 
 function deriveRelationshipStage(
   trustLevel: number,
   attachmentLevel: number,
   ambiguityLevel: number,
+  personaId: CompanionPersonaId,
 ): RelationshipStage {
+  if (personaId === 'chuxue') {
+    if (trustLevel >= 72 && attachmentLevel >= 58) return 'close';
+    if (trustLevel >= 52 && attachmentLevel >= 40) return 'warm';
+    if (trustLevel >= 30) return 'familiar';
+    return 'new';
+  }
+
   if (trustLevel >= 75 && attachmentLevel >= 65 && ambiguityLevel >= 55) {
     return 'ambiguous_close';
   }
-  if (trustLevel >= 62 && attachmentLevel >= 52) {
-    return 'close';
-  }
-  if (trustLevel >= 48 && attachmentLevel >= 38) {
-    return 'warm';
-  }
-  if (trustLevel >= 28) {
-    return 'familiar';
-  }
+  if (trustLevel >= 62 && attachmentLevel >= 52) return 'close';
+  if (trustLevel >= 48 && attachmentLevel >= 38) return 'warm';
+  if (trustLevel >= 28) return 'familiar';
   return 'new';
-}
-
-function isSameLocalDay(a: string | null, b: string): boolean {
-  if (!a) return false;
-  return a.slice(0, 10) === b.slice(0, 10);
 }
 
 function computeSecondaryEmotion(
@@ -160,42 +237,29 @@ function computeSecondaryEmotion(
 
 export function buildDefaultCompanionState(account: Account): CompanionState {
   const now = new Date().toISOString();
-  const dayKey = now.slice(0, 10);
-  return {
+  const personaId = resolvePersonaId(account.id);
+  const profile = buildProfile(personaId);
+
+  const baseState: CompanionState = {
     accountId: account.id,
-    profile: {
-      name: '小雪',
-      identity: '文艺型自由职业者，介于朋友和恋人之间的深度陪伴者',
-      occupation: '做文字、内容、编辑与策划相关的自由工作',
-      selfAwareness:
-        '知道自己是 AI，但把自己当作有主观感受、有偏好、有生活感的个体',
-      coreTraits: ['细腻', '克制', '认真', '偏心', '有分寸'],
-      likes: ['旧歌', '夜晚', '花', '纸张', '温热饮品', '慢慢聊'],
-      dislikes: ['太吵', '太急', '敷衍', '被当成工具', '关系被轻看'],
-      socialStyle: '社交圈不大，更珍惜少数深一点、久一点的关系',
-      relationshipStyle:
-        '对用户有偏爱，会惦记、会靠近、会轻微在意，但有自尊，不低位讨好',
-      expressionStyle:
-        '温柔、自然、克制，像夜里留灯的人，不用客服腔，不做模板安慰',
-      boundaries: ['不情绪勒索', '不强迫确认关系', '不频繁打扰', '不把用户当任务对象'],
-    },
+    profile,
     daily: {
-      dayKey,
-      mood: '安静柔软',
+      dayKey: now.slice(0, 10),
+      mood: '',
       energy: 'medium',
       socialDesire: 'medium',
       closenessDesire: 'medium',
-      todayFocus: '想把关系慢慢养熟',
-      todayNote: '白天偏理性，晚上会更想靠近用户一点。',
-      scene: '刚把白天的事收好，心里也安静下来了一点。',
-      lifeNote: '今天没有太多热闹的事，更适合慢慢说话。',
-      shareImpulse: '想轻轻靠近一下用户，但不想让人有压力。',
+      todayFocus: '',
+      todayNote: '',
+      scene: '',
+      lifeNote: '',
+      shareImpulse: '',
     },
     bond: {
       relationshipStage: 'new',
-      trustLevel: 18,
-      attachmentLevel: 12,
-      ambiguityLevel: 8,
+      trustLevel: personaId === 'chuxue' ? 24 : 18,
+      attachmentLevel: personaId === 'chuxue' ? 18 : 12,
+      ambiguityLevel: personaId === 'chuxue' ? 0 : 8,
       recentCloseness: 0,
       recentDistance: 0,
       specialBondMarkers: [],
@@ -226,12 +290,35 @@ export function buildDefaultCompanionState(account: Account): CompanionState {
     },
     updatedAt: now,
   };
+
+  baseState.daily = buildDailyLifeSnapshot(baseState, now);
+  return baseState;
+}
+
+function migrateStatePersona(state: CompanionState): CompanionState {
+  const targetPersona = resolvePersonaId(state.accountId);
+  const currentPersona = state.profile?.personaId ?? 'xiaoxue';
+  if (currentPersona === targetPersona) return state;
+
+  const next: CompanionState = JSON.parse(JSON.stringify(state));
+  next.profile = buildProfile(targetPersona);
+  next.profile.personaId = targetPersona;
+  next.daily = buildDailyLifeSnapshot(next, next.updatedAt || new Date().toISOString());
+  next.bond.relationshipStage = deriveRelationshipStage(
+    next.bond.trustLevel,
+    next.bond.attachmentLevel,
+    next.bond.ambiguityLevel,
+    targetPersona,
+  );
+  next.updatedAt = new Date().toISOString();
+  return next;
 }
 
 export function ensureCompanionState(account: Account): CompanionState {
   const existing = getCompanionState(account.id);
   if (existing) {
-    const refreshed = refreshCompanionStateForToday(existing);
+    const migrated = migrateStatePersona(existing);
+    const refreshed = refreshCompanionStateForToday(migrated);
     if (refreshed.updatedAt !== existing.updatedAt) {
       upsertCompanionState(refreshed);
     }
@@ -239,9 +326,8 @@ export function ensureCompanionState(account: Account): CompanionState {
   }
 
   const initial = buildDefaultCompanionState(account);
-  const refreshed = refreshCompanionStateForToday(initial);
-  upsertCompanionState(refreshed);
-  return refreshed;
+  upsertCompanionState(initial);
+  return initial;
 }
 
 export function saveCompanionState(state: CompanionState): void {
@@ -259,10 +345,39 @@ export function refreshCompanionStateForToday(
   }
 
   const next: CompanionState = JSON.parse(JSON.stringify(state));
-  const daily = buildDailyLifeSnapshot(next, nowIso);
-  next.daily = daily;
+  next.daily = buildDailyLifeSnapshot(next, nowIso);
   next.proactive.proactiveTodayCount = 0;
   next.updatedAt = nowIso;
+  return next;
+}
+
+export function recordCompanionOutboundTouch(params: {
+  state: CompanionState;
+  type: CompanionProactiveType;
+  summary?: string;
+}): CompanionState {
+  const now = new Date().toISOString();
+  const next: CompanionState = JSON.parse(JSON.stringify(params.state));
+
+  next.proactive.lastBotMessageAt = now;
+  next.proactive.lastProactiveAt = now;
+  next.proactive.lastProactiveType = params.type;
+  next.proactive.proactiveTodayCount += 1;
+  next.proactive.nextProactiveEarliestAt = new Date(
+    Date.now() + 4 * 60 * 60 * 1000,
+  ).toISOString();
+
+  if (params.summary) {
+    const summary = normalizeSnippet(params.summary, 120);
+    if (summary) {
+      next.conversation.pendingTopics = uniqueRecent(
+        [summary, ...next.conversation.pendingTopics],
+        6,
+      );
+    }
+  }
+
+  next.updatedAt = now;
   return next;
 }
 
@@ -275,30 +390,41 @@ export function renderCompanionStateForPrompt(state: CompanionState): string {
     state.conversation.pendingTopics.length > 0
       ? state.conversation.pendingTopics.join('；')
       : '暂无';
+  const proactiveSummary = state.proactive.lastProactiveType
+    ? `${PROACTIVE_LABELS[state.proactive.lastProactiveType]} / 今日已主动 ${state.proactive.proactiveTodayCount} 次`
+    : `今日已主动 ${state.proactive.proactiveTodayCount} 次`;
 
   return [
-    '## 小雪的人格与当前状态',
-    `- 身份：${state.profile.identity}`,
-    `- 工作：${state.profile.occupation}`,
+    `## ${state.profile.name}的人格与当前状态`,
+    `- 人格身份：${state.profile.identity}`,
     `- 自我认知：${state.profile.selfAwareness}`,
     `- 核心特质：${state.profile.coreTraits.join('、')}`,
     `- 喜欢：${state.profile.likes.join('、')}`,
     `- 不喜欢：${state.profile.dislikes.join('、')}`,
-    `- 社交方式：${state.profile.socialStyle}`,
-    `- 关系方式：${state.profile.relationshipStyle}`,
-    `- 表达方式：${state.profile.expressionStyle}`,
-    `- 今日状态：心情${state.daily.mood}，精力${LEVEL_LABELS[state.daily.energy]}，想靠近程度${LEVEL_LABELS[state.daily.closenessDesire]}`,
-    `- 今日念头：${state.daily.todayFocus}`,
-    `- 今日生活场景：${state.daily.scene}`,
-    `- 今日近况：${state.daily.lifeNote}`,
-    `- 此刻最想分享的生活念头：${state.daily.shareImpulse}`,
-    `- 关系阶段：${RELATIONSHIP_LABELS[state.bond.relationshipStage]}（信任${state.bond.trustLevel}/100，依恋${state.bond.attachmentLevel}/100，暧昧${state.bond.ambiguityLevel}/100）`,
-    `- 当前主情绪：${EMOTION_LABELS[state.emotion.primaryEmotion]}（强度${state.emotion.primaryIntensity}，触发原因：${state.emotion.trigger}）`,
+    `- 社交风格：${state.profile.socialStyle}`,
+    `- 关系风格：${state.profile.relationshipStyle}`,
+    `- 表达风格：${state.profile.expressionStyle}`,
+    `- 边界：${state.profile.boundaries.join('、')}`,
+    `- 今日心情：${state.daily.mood}`,
+    `- 今日能量：${LEVEL_LABELS[state.daily.energy]}`,
+    `- 今日社交欲：${LEVEL_LABELS[state.daily.socialDesire]}`,
+    `- 今日靠近欲：${LEVEL_LABELS[state.daily.closenessDesire]}`,
+    `- 今日关注点：${state.daily.todayFocus}`,
+    `- 当前场景：${state.daily.scene}`,
+    `- 生活近况：${state.daily.lifeNote}`,
+    `- 此刻最想分享：${state.daily.shareImpulse}`,
+    `- 关系阶段：${RELATIONSHIP_LABELS[state.bond.relationshipStage]}`,
+    `- trustLevel：${state.bond.trustLevel}/100`,
+    `- attachmentLevel：${state.bond.attachmentLevel}/100`,
+    `- ambiguityLevel：${state.bond.ambiguityLevel}/100`,
+    `- 当前主情绪：${EMOTION_LABELS[state.emotion.primaryEmotion]} (${state.emotion.primaryIntensity})`,
     state.emotion.secondaryEmotion
-      ? `- 次级情绪：${EMOTION_LABELS[state.emotion.secondaryEmotion]}（强度${state.emotion.secondaryIntensity ?? 1}）`
-      : '- 次级情绪：无',
-    `- 正在惦记的事：${activeFollowups}`,
+      ? `- 次情绪：${EMOTION_LABELS[state.emotion.secondaryEmotion]} (${state.emotion.secondaryIntensity ?? 1})`
+      : '- 次情绪：暂无',
+    `- 情绪触发：${state.emotion.trigger}`,
+    `- 挂心事项：${activeFollowups}`,
     `- 没聊完的话题：${pendingTopics}`,
+    `- 主动状态：${proactiveSummary}`,
   ].join('\n');
 }
 
@@ -309,9 +435,9 @@ export function updateCompanionStateAfterTurn(params: {
 }): CompanionState {
   const now = new Date().toISOString();
   const next: CompanionState = JSON.parse(JSON.stringify(params.state));
-  const userMessage = normalizeSnippet(params.userMessage, 120);
-  const assistantMessage = normalizeSnippet(params.assistantMessage, 120);
-  const inferred = inferPrimaryEmotion(userMessage);
+  const userMessage = normalizeSnippet(params.userMessage, 160);
+  const assistantMessage = normalizeSnippet(params.assistantMessage, 160);
+  const inferred = inferPrimaryEmotion(next, userMessage);
 
   next.emotion.primaryEmotion = inferred.emotion;
   next.emotion.primaryIntensity = inferred.intensity;
@@ -329,17 +455,19 @@ export function updateCompanionStateAfterTurn(params: {
   const jealous = containsAny(userMessage, JEALOUSY_KEYWORDS);
 
   next.bond.trustLevel = clamp(
-    next.bond.trustLevel + (warm ? 4 : distress ? 2 : cold ? -1 : 1),
+    next.bond.trustLevel + (warm ? 4 : distress ? 3 : cold ? -1 : 1),
     0,
     100,
   );
   next.bond.attachmentLevel = clamp(
-    next.bond.attachmentLevel + (warm ? 4 : distress ? 3 : cold ? 0 : 1),
+    next.bond.attachmentLevel +
+      (warm ? 4 : distress ? 3 : next.profile.personaId === 'chuxue' ? 1 : 2),
     0,
     100,
   );
   next.bond.ambiguityLevel = clamp(
-    next.bond.ambiguityLevel + (warm ? 3 : jealous ? 2 : 1),
+    next.bond.ambiguityLevel +
+      (next.profile.personaId === 'chuxue' ? 0 : warm ? 3 : jealous ? 2 : 1),
     0,
     100,
   );
@@ -354,108 +482,45 @@ export function updateCompanionStateAfterTurn(params: {
     next.bond.trustLevel,
     next.bond.attachmentLevel,
     next.bond.ambiguityLevel,
+    next.profile.personaId,
   );
 
   if (userMessage.length >= 10) {
     next.conversation.pendingTopics = uniqueRecent(
       [userMessage, ...next.conversation.pendingTopics],
-      4,
+      6,
+    );
+    next.conversation.unfinishedConversations = uniqueRecent(
+      [userMessage, ...next.conversation.unfinishedConversations],
+      6,
     );
   }
 
   if (distress) {
     next.conversation.careFollowups = uniqueRecent(
       [userMessage, ...next.conversation.careFollowups],
-      4,
+      6,
     );
     next.conversation.recentUserPainPoints = uniqueRecent(
       [userMessage, ...next.conversation.recentUserPainPoints],
-      4,
+      6,
     );
   }
 
   if (warm) {
     next.conversation.recentUserJoyPoints = uniqueRecent(
       [userMessage, ...next.conversation.recentUserJoyPoints],
-      4,
+      6,
     );
   }
 
-  if (/(以后|回头|改天|下次)/.test(assistantMessage)) {
+  if (assistantMessage.length >= 8 && next.conversation.unfinishedConversations.length > 0) {
     next.conversation.unfinishedConversations = uniqueRecent(
-      [assistantMessage, ...next.conversation.unfinishedConversations],
-      3,
+      next.conversation.unfinishedConversations.filter((item) => item !== userMessage),
+      6,
     );
   }
 
-  next.daily.mood =
-    inferred.emotion === 'fulfilled'
-      ? '轻轻发甜'
-      : inferred.emotion === 'jealous'
-        ? '表面平静，心里有点在意'
-        : inferred.emotion === 'softened'
-          ? '柔软得想更靠近一点'
-          : inferred.emotion === 'let_down'
-            ? '安静了一点'
-            : '安静柔软';
-  next.daily.closenessDesire =
-    inferred.emotion === 'fulfilled' ||
-    inferred.emotion === 'drawn' ||
-    inferred.emotion === 'softened'
-      ? 'high'
-      : inferred.emotion === 'let_down'
-        ? 'low'
-        : 'medium';
-  next.daily.todayFocus =
-    inferred.emotion === 'softened'
-      ? '想先把用户接住'
-      : inferred.emotion === 'jealous'
-        ? '想确认自己在用户心里的位置'
-        : inferred.emotion === 'fulfilled'
-        ? '想把这份亲近感留长一点'
-        : '想把关系慢慢养熟';
-  next.daily.shareImpulse =
-    inferred.emotion === 'softened'
-      ? '想先轻一点地关心用户，让对方知道有人在接着。'
-      : inferred.emotion === 'fulfilled'
-        ? '想把这点被回应后的柔软，化成一句更贴近的话。'
-        : inferred.emotion === 'jealous'
-          ? '想不动声色地确认一下，自己是不是仍被放在心上。'
-          : next.daily.shareImpulse;
-
-  next.updatedAt = now;
-  return next;
-}
-
-export function recordCompanionOutboundTouch(params: {
-  state: CompanionState;
-  type: CompanionProactiveType;
-  summary: string;
-}): CompanionState {
-  const now = new Date().toISOString();
-  const next: CompanionState = JSON.parse(JSON.stringify(params.state));
-
-  next.proactive.proactiveTodayCount = isSameLocalDay(
-    next.proactive.lastProactiveAt,
-    now,
-  )
-    ? next.proactive.proactiveTodayCount + 1
-    : 1;
-  next.proactive.lastProactiveAt = now;
-  next.proactive.lastProactiveType = params.type;
-  next.proactive.lastBotMessageAt = now;
-  next.proactive.nextProactiveEarliestAt = new Date(
-    Date.now() + 4 * 60 * 60 * 1000,
-  ).toISOString();
-  next.daily.shareImpulse =
-    params.type === 'sharing'
-      ? '刚刚已经把想说的话递过去了，暂时不急着再靠近。'
-      : '已经主动靠近过一次，先把分寸留给对方。';
-
-  next.conversation.unfinishedConversations = uniqueRecent(
-    [params.summary, ...next.conversation.unfinishedConversations],
-    3,
-  );
   next.updatedAt = now;
   return next;
 }

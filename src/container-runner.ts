@@ -1,5 +1,5 @@
 /**
- * HushBay Agent Runner Adapter
+ * SnowWord Agent Runner Adapter
  *
  * Development mode now runs the agent directly on the host.
  * This file keeps the old interface so the rest of the app can stay stable.
@@ -7,12 +7,14 @@
 
 import { runLocalAgent } from './agent-runner.js';
 import { logger } from './logger.js';
+import { CompanionPersonaId } from './types.js';
 
 export interface ContainerInput {
   accountId: string;
   prompt: string;
   sessionId?: string;
   latestUserMessage?: string;
+  personaId?: CompanionPersonaId;
 }
 
 export interface ContainerOutput {

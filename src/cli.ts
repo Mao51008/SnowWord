@@ -1,5 +1,5 @@
 /**
- * HushBay CLI
+ * SnowWord CLI
  *
  * Examples:
  *   npx tsx src/cli.ts login
@@ -17,7 +17,7 @@ import { scanLogin } from './ilink.js';
 function resolveAccountArg(arg?: string) {
   const accounts = listAccounts();
   if (accounts.length === 0) {
-    throw new Error('No accounts found. Run "npx tsx src/cli.ts login" first.');
+    throw new Error('没有找到账号，请先运行 "npx tsx src/cli.ts login"。');
   }
 
   if (!arg) {
@@ -32,7 +32,7 @@ function resolveAccountArg(arg?: string) {
   const byId = accounts.find((account) => account.id === arg);
   if (byId) return byId;
 
-  throw new Error(`Account not found: ${arg}`);
+  throw new Error(`未找到账号: ${arg}`);
 }
 
 async function cmdLogin(): Promise<void> {
@@ -50,10 +50,10 @@ async function cmdLogin(): Promise<void> {
     result.base_url,
   );
 
-  console.log('\n账号创建成功');
+  console.log('\n账号添加成功');
   console.log(`  名称: ${account.name}`);
   console.log(`  ID: ${account.id}`);
-  console.log('\n然后运行 npm start 启动 HushBay。');
+  console.log('\n然后运行 npm start 启动 SnowWord。');
 }
 
 async function cmdList(): Promise<void> {
@@ -61,7 +61,7 @@ async function cmdList(): Promise<void> {
   const accounts = listAccounts();
 
   if (accounts.length === 0) {
-    console.log('还没有账号。先运行 "npx tsx src/cli.ts login"。');
+    console.log('还没有账号，请先运行 "npx tsx src/cli.ts login"。');
     return;
   }
 
@@ -99,7 +99,7 @@ async function cmdState(arg?: string): Promise<void> {
     `主情绪: ${state.emotion.primaryEmotion} (${state.emotion.primaryIntensity})`,
   );
   console.log(
-    `次级情绪: ${state.emotion.secondaryEmotion ?? 'none'}${
+    `副情绪: ${state.emotion.secondaryEmotion ?? 'none'}${
       state.emotion.secondaryIntensity != null
         ? ` (${state.emotion.secondaryIntensity})`
         : ''
@@ -115,7 +115,7 @@ async function cmdState(arg?: string): Promise<void> {
   console.log(`recentCloseness: ${state.bond.recentCloseness}`);
   console.log(`recentDistance: ${state.bond.recentDistance}`);
   console.log('');
-  console.log('【今日状态】');
+  console.log('【日状态】');
   console.log(`mood: ${state.daily.mood}`);
   console.log(`energy: ${state.daily.energy}`);
   console.log(`socialDesire: ${state.daily.socialDesire}`);
@@ -135,7 +135,7 @@ async function cmdState(arg?: string): Promise<void> {
     `nextProactiveEarliestAt: ${state.proactive.nextProactiveEarliestAt ?? 'none'}`,
   );
   console.log('');
-  console.log('【话题线索】');
+  console.log('【话题与跟进】');
   console.log(
     `careFollowups: ${
       state.conversation.careFollowups.length > 0

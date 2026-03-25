@@ -6,12 +6,15 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, TIMEZONE } from './config.js';
 import {
+  getMemoriesForAccount,
   createTask,
   deleteTask,
   getTaskById,
   getTasksForAccount,
+  searchMemories,
   updateTask,
 } from './db.js';
+import { persistStructuredMemory } from './user-memory.js';
 import {
   getCurrentTimeSnapshot,
   getWeatherSummary,
@@ -681,6 +684,22 @@ async function executeManageReminder(args: {
 
 async function executeReadMemory(args: { query: string }): Promise<ToolResult> {
   const context = requireToolContext();
+  const dbMemories = getMemoriesForAccount(context.accountId).filter((memory) =>
+    memory.content.toLowerCase().includes(args.query.toLowerCase()),
+  );
+
+  if (dbMemories.length > 0) {
+    return {
+      output: dbMemories
+        .slice(0, 8)
+        .map(
+          (memory) =>
+            `- ${memory.content}${memory.tags ? ` [tags: ${memory.tags}]` : ''}`,
+        )
+        .join('\n'),
+    };
+  }
+
   const soulPath = getSoulPath(context.accountId);
 
   if (!fs.existsSync(soulPath)) {
@@ -707,19 +726,16 @@ async function executeWriteMemory(args: {
   tags?: string;
 }): Promise<ToolResult> {
   const context = requireToolContext();
-  const soulPath = getSoulPath(context.accountId);
-  fs.mkdirSync(path.dirname(soulPath), { recursive: true });
-
-  let existing = '';
-  if (fs.existsSync(soulPath)) {
-    existing = fs.readFileSync(soulPath, 'utf-8');
-  }
-
   const importance = args.importance || 3;
-  const tagLine = args.tags ? `\nTags: ${args.tags}` : '';
-  const newEntry = `\n\n## ${new Date().toLocaleDateString('zh-CN')} (importance: ${importance})${tagLine}\n${args.content}`;
-
-  fs.writeFileSync(soulPath, existing + newEntry);
+  persistStructuredMemory({
+    account: {
+      id: context.accountId,
+      soul_md_path: getSoulPath(context.accountId),
+    },
+    content: args.content,
+    importance,
+    tags: args.tags,
+  });
   return { output: `Memory written: ${truncate(args.content, 80)}` };
 }
 
@@ -728,6 +744,23 @@ async function executeSearchMemory(args: {
   min_importance?: number;
 }): Promise<ToolResult> {
   const context = requireToolContext();
+  const dbMatches = searchMemories(context.accountId, {
+    tag: args.tag,
+    minImportance: args.min_importance,
+    limit: 20,
+  });
+
+  if (dbMatches.length > 0) {
+    return {
+      output: `Found ${dbMatches.length} memory entries:\n${dbMatches
+        .map(
+          (memory) =>
+            `- ${memory.content}${memory.tags ? ` [tags: ${memory.tags}]` : ''}`,
+        )
+        .join('\n')}`,
+    };
+  }
+
   const soulPath = getSoulPath(context.accountId);
 
   if (!fs.existsSync(soulPath)) {

@@ -1,7 +1,7 @@
 {
-  "name": "qiyu-companion",
-  "version": "1.2.21",
-  "description": "QiYu is a WeChat AI companion runtime with memory, reminders, proactive messaging, and weather-aware extensions.",
+  "name": "SnowWord",
+  "version": "0.1.2",
+  "description": "SnowWord is a WeChat AI companion runtime with memory, reminders, proactive messaging, and weather-aware extensions.",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
