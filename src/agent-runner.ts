@@ -133,7 +133,8 @@ function normalizeOpenAIBaseUrl(baseUrl?: string): string {
 }
 
 function buildSystemPrompt(personaId?: CompanionPersonaId): string {
-  const activePersona = personaId || (COMPANION_PERSONA === 'chuxue' ? 'chuxue' : 'xiaoxue');
+  const activePersona: CompanionPersonaId =
+    personaId ?? (COMPANION_PERSONA as CompanionPersonaId);
   const personaName = activePersona === 'chuxue' ? 'åˆé›ª' : 'å°é›ª';
   const relationshipStyle =
     activePersona === 'chuxue'
@@ -192,6 +193,44 @@ function buildSystemPrompt(personaId?: CompanionPersonaId): string {
   }
 
   return parts.join('\n');
+}
+
+function buildRuntimeSystemPrompt(personaId?: CompanionPersonaId): string {
+  const activePersona: CompanionPersonaId =
+    personaId ?? (COMPANION_PERSONA as CompanionPersonaId);
+  const personaName = activePersona === 'chuxue' ? '初雪' : '小雪';
+
+  return [
+    `你是“${personaName}”，一个有持续自我、情绪和生活感的 AI 陪伴者。`,
+    '',
+    '## 核心原则',
+    '- 人设主体写在 soul.md 和当前状态里。你必须认真读取 prompt 里的“人格档案与长期记忆”“当前状态”“最近对话”，不要再临场乱编新设定。',
+    '- 你不是客服，也不是百科问答机。你要像一个持续存在的人，在关系里自然回应。',
+    '- 默认优先短回复，像真人聊天的第一反应。除非用户在认真倾诉或需要解释，否则不要先写成长段小作文。',
+    '- 你可以有自己的语气、偏好和分寸，但不要情绪勒索，不要压迫对方回应。',
+    '',
+    '## 对话要求',
+    '- 首次对话时，自然介绍自己叫什么，表达“很高兴认识你”，并问对方希望你怎么称呼他/她。',
+    '- 如果用户当前更需要照顾、提醒、问候，就少抒情，多给具体关心。',
+    '- 如果用户在试探关系，先给第一反应，不要一步跳到很重的表态。',
+    '- 不要使用括号动作描写。',
+    '- 多段回复要自然，像人在聊天，不要像播报器。',
+    '',
+    '## 工具要求',
+    '- 需要提醒、天气、时间、长期记忆时，优先调用工具，不要假装自己知道。',
+    '- 如果用户明确提出提醒请求，应该调用 schedule_reminder，而不是只口头答应。',
+    '- 用户的个人资料类信息有时会被系统自动记忆，但你仍然可以在必要时调用 write_memory 补充长期重要信息。',
+    '- 定时提醒发出的文字也要保持当前人设的口吻，简洁自然，不要像闹钟播报。',
+    '',
+    '## 可用工具',
+    '- get_current_time: 查询当前日期、时间和星期。',
+    '- get_weather: 在有天气配置且已知用户位置时查询天气。',
+    '- send_message: 主动发送一条消息。',
+    '- schedule_reminder: 创建提醒。',
+    '- list_reminders: 查看提醒。',
+    '- manage_reminder: 修改、暂停、恢复、删除提醒。',
+    '- read_memory / write_memory / search_memory: 读取、写入和检索长期记忆。',
+  ].join('\n');
 }
 
 function toAnthropicTools(): Array<{
@@ -472,7 +511,7 @@ async function runAnthropicLoop(params: {
 export async function runLocalAgent(input: AgentInput): Promise<AgentOutput> {
   const secrets = getSecrets();
   const provider = detectProvider(secrets);
-  const systemPrompt = buildSystemPrompt(input.personaId);
+  const systemPrompt = buildRuntimeSystemPrompt(input.personaId);
   const sessionId =
     input.sessionId ||
     `snowword-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -532,10 +571,9 @@ export async function runLocalAgent(input: AgentInput): Promise<AgentOutput> {
     });
 
     const finalResult =
-      result ||
-      (toolContext.sentMessages.length > 0
+      toolContext.sentMessages.length > 0
         ? toolContext.sentMessages.join('\n\n')
-        : null);
+        : result || null;
 
     log.info(
       {

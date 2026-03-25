@@ -9,8 +9,8 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'ANTHROPIC_MODEL',
-  'COMPANION_PERSONA',
   'OPENAI_MODEL',
+  'PROACTIVE_WEIGHT',
 ]);
 
 export const ASSISTANT_NAME =
@@ -83,5 +83,11 @@ export const AGENT_MODEL =
   envConfig.ANTHROPIC_MODEL ||
   'gpt-4o';
 
-export const COMPANION_PERSONA =
-  process.env.COMPANION_PERSONA || envConfig.COMPANION_PERSONA || 'xiaoxue';
+export const COMPANION_PERSONA = 'xiaoxue';
+
+const proactiveWeightRaw =
+  process.env.PROACTIVE_WEIGHT || envConfig.PROACTIVE_WEIGHT || '1';
+const proactiveWeightParsed = Number.parseFloat(proactiveWeightRaw);
+export const PROACTIVE_WEIGHT = Number.isFinite(proactiveWeightParsed)
+  ? Math.min(2, Math.max(0.4, proactiveWeightParsed))
+  : 1;

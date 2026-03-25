@@ -314,6 +314,140 @@ function inferAbsoluteOnceFromUserText(text: string | undefined): string | null 
   return target.toISOString();
 }
 
+function containsReminderIntent(text: string): boolean {
+  return /(提醒|记得|别忘|叫我)/.test(text);
+}
+
+function parseWeekdayToken(text: string): number | null {
+  const match = text.match(/(?:本周|这周|下周)?(?:周|星期)([一二三四五六日天])/);
+  if (!match) return null;
+  const token = match[1];
+  if (token === '一') return 1;
+  if (token === '二') return 2;
+  if (token === '三') return 3;
+  if (token === '四') return 4;
+  if (token === '五') return 5;
+  if (token === '六') return 6;
+  return 0;
+}
+
+function inferPeriodDefault(text: string): { hour: number; minute: number } {
+  if (/(凌晨)/.test(text)) return { hour: 1, minute: 0 };
+  if (/(早上|清晨)/.test(text)) return { hour: 8, minute: 0 };
+  if (/(上午)/.test(text)) return { hour: 10, minute: 0 };
+  if (/(中午)/.test(text)) return { hour: 12, minute: 0 };
+  if (/(下午)/.test(text)) return { hour: 15, minute: 0 };
+  if (/(傍晚|晚上|今晚)/.test(text)) return { hour: 20, minute: 0 };
+  return { hour: 9, minute: 0 };
+}
+
+function inferWeekdayOnceFromUserText(text: string): string | null {
+  const weekday = parseWeekdayToken(text);
+  if (weekday == null) return null;
+
+  const now = new Date();
+  const target = new Date(now);
+  target.setSeconds(0, 0);
+
+  const currentWeekday = now.getDay();
+  let delta = (weekday - currentWeekday + 7) % 7;
+  if (delta === 0) {
+    delta = 7;
+  }
+
+  if (/下周/.test(text)) {
+    delta += 7;
+  }
+
+  target.setDate(target.getDate() + delta);
+
+  const explicitClock = parseClockTimeFromUserText(text);
+  const clock = explicitClock ?? inferPeriodDefault(text);
+  target.setHours(clock.hour, clock.minute, 0, 0);
+  return target.toISOString();
+}
+
+function inferReminderPromptFromUserText(text: string): string {
+  if (/吃药/.test(text)) return '提醒用户吃药';
+  if (/生日/.test(text)) return '提醒用户妈妈生日';
+  if (/拿外卖|取外卖/.test(text)) return '提醒用户拿外卖';
+  if (/起床/.test(text)) return '提醒用户起床';
+  return `提醒用户：${text.replace(/\s+/g, ' ').trim()}`;
+}
+
+function inferReminderTypeFromUserText(
+  text: string,
+): 'medicine' | 'exercise' | 'water' | 'custom' {
+  if (/吃药|服药/.test(text)) return 'medicine';
+  if (/运动|锻炼/.test(text)) return 'exercise';
+  if (/喝水|补水/.test(text)) return 'water';
+  return 'custom';
+}
+
+function inferVoiceTextFromUserText(text: string): string {
+  if (/吃药/.test(text)) return '该吃药了。';
+  if (/生日/.test(text)) return '别忘了妈妈生日。';
+  if (/拿外卖|取外卖/.test(text)) return '外卖到了，记得去拿。';
+  if (/起床/.test(text)) return '该起床了。';
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function buildFallbackReminderPrompt(text: string): string {
+  if (/生日/.test(text)) return '提醒用户妈妈的生日快到了';
+  if (/吃药|服药/.test(text)) return '提醒用户按时吃药';
+  if (/吃饭|午饭|晚饭|早餐/.test(text)) return '提醒用户记得吃饭';
+  if (/起床|叫醒/.test(text)) return '提醒用户按时起床';
+  return `提醒用户：${text.replace(/\s+/g, ' ').trim()}`;
+}
+
+function buildFallbackVoiceText(text: string): string {
+  if (/生日/.test(text)) return '别忘了妈妈生日这件事。';
+  if (/吃药|服药/.test(text)) return '该吃药了。';
+  if (/吃饭|午饭|晚饭|早餐/.test(text)) return '记得吃点东西。';
+  if (/起床|叫醒/.test(text)) return '该起床了。';
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+export function tryAutoScheduleReminderFromUserText(params: {
+  accountId: string;
+  userText: string;
+}): { created: boolean; taskId?: string; reason?: string } {
+  const text = params.userText.trim();
+  if (!text || !containsReminderIntent(text)) {
+    return { created: false, reason: 'not-a-reminder-intent' };
+  }
+
+  const scheduleValue =
+    inferWeekdayOnceFromUserText(text) || inferAbsoluteOnceFromUserText(text);
+  if (!scheduleValue) {
+    return { created: false, reason: 'no-supported-time-found' };
+  }
+
+  const taskId = `reminder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const prompt = buildFallbackReminderPrompt(text);
+  const reminderType = inferReminderTypeFromUserText(text);
+  const voiceText = buildFallbackVoiceText(text);
+  const nextRun = computeNextRunFromSchedule({
+    schedule_type: 'once',
+    schedule_value: scheduleValue,
+  });
+
+  createTask({
+    id: taskId,
+    account_id: params.accountId,
+    prompt,
+    schedule_type: 'once',
+    schedule_value: scheduleValue,
+    reminder_type: reminderType,
+    voice_text: voiceText,
+    next_run: nextRun,
+    status: 'active',
+    created_at: new Date().toISOString(),
+  });
+
+  return { created: true, taskId };
+}
+
 function normalizeScheduleArgs(args: {
   prompt: string;
   schedule_type: 'cron' | 'interval' | 'once';

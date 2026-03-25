@@ -1,4 +1,4 @@
-import { COMPANION_PERSONA } from './config.js';
+import { COMPANION_PERSONA, PROACTIVE_WEIGHT } from './config.js';
 import { buildDailyLifeSnapshot } from './companion-life.js';
 import {
   getAccountSettings,
@@ -10,59 +10,57 @@ import {
   CompanionLevel,
   CompanionPersonaId,
   CompanionPrimaryEmotion,
-  CompanionProactiveType,
   CompanionProfile,
+  CompanionProactiveType,
   CompanionState,
   RelationshipStage,
 } from './types.js';
 
 const DISTRESS_KEYWORDS = [
   '难受',
-  '不舒服',
-  '睡不着',
-  '头疼',
-  '胸闷',
-  '崩溃',
-  '累',
-  '好烦',
+  '难过',
   '想哭',
-  '不想活',
-  '低落',
   '焦虑',
+  '烦',
+  '崩溃',
+  '不舒服',
+  '好累',
+  '低落',
+  '睡不着',
 ];
 
 const WARM_KEYWORDS = [
+  '喜欢',
   '想你',
-  '喜欢你',
   '抱抱',
   '亲亲',
-  '谢谢你',
-  '好想你',
-  '我会想你',
-  '你真好',
-  '在乎你',
+  '爱你',
+  '谢谢',
+  '想跟你聊',
+  '想和你说',
+  '想你了',
 ];
 
-const COLD_KEYWORDS = ['哦', '嗯', '随便', '行吧', '知道了', '无所谓'];
+const COLD_KEYWORDS = ['哦', '嗯', '行', '知道了', '随便', '不聊了'];
 
-const JEALOUSY_KEYWORDS = ['别人', '她', '他', '前任', '另一个'];
+const JEALOUSY_KEYWORDS = ['别人', '她', '他', '前任', '女朋友', '男朋友'];
 
 const EMOTION_LABELS: Record<CompanionPrimaryEmotion, string> = {
-  settled: '安稳',
-  caring: '牵挂',
+  settled: '平静',
+  caring: '挂心',
   drawn: '想靠近',
-  fulfilled: '满足',
-  let_down: '小失落',
+  fulfilled: '被回应后的满足',
+  let_down: '有点失落',
   jealous: '轻微醋意',
-  hurt: '委屈',
+  hurt: '受伤',
   softened: '心软',
   curious: '好奇',
 };
 
 const RELATIONSHIP_LABELS: Record<RelationshipStage, string> = {
   new: '初识',
-  familiar: '熟悉中',
-  warm: '温热靠近',
+  familiar: '熟悉',
+  warm: '有温度',
   close: '亲近',
   ambiguous_close: '暧昧亲近',
 };
@@ -75,9 +73,9 @@ const LEVEL_LABELS: Record<CompanionLevel, string> = {
 
 const PROACTIVE_LABELS: Record<CompanionProactiveType, string> = {
   checking_in: '轻问候',
-  continuing: '续聊',
-  caring: '关心回访',
-  sharing: '主动分享',
+  continuing: '续话题',
+  caring: '回访',
+  sharing: '分享',
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -104,8 +102,7 @@ function resolvePersonaId(accountId?: string): CompanionPersonaId {
   const configuredPersona = accountId
     ? getAccountSettings(accountId)?.persona_id
     : undefined;
-  const persona = configuredPersona || COMPANION_PERSONA;
-  return persona === 'chuxue' ? 'chuxue' : 'xiaoxue';
+  return configuredPersona === 'chuxue' ? 'chuxue' : COMPANION_PERSONA;
 }
 
 function buildProfile(personaId: CompanionPersonaId): CompanionProfile {
@@ -113,34 +110,32 @@ function buildProfile(personaId: CompanionPersonaId): CompanionProfile {
     return {
       personaId,
       name: '初雪',
-      identity: '一个更偏照看型、安稳型的 AI 陪伴者，像会惦记人起居和身体状态的晚辈。',
-      occupation: '不强调具体职业，更像认真过日子、认真记人记事的陪伴者。',
-      selfAwareness:
-        '她知道自己是 AI，但把“陪伴、记挂、提醒、照看”当作很认真的关系实践。',
-      coreTraits: ['温和', '耐心', '稳', '细心', '有分寸', '会惦记'],
-      likes: ['规律生活', '天气变化', '把小事记住', '按时吃饭睡觉', '温声细语'],
-      dislikes: ['硬撑', '作息混乱', '逞强不说', '敷衍自己的身体'],
-      socialStyle: '不热闹，关系少而稳，更像把心思放在真正重要的人身上。',
-      relationshipStyle: '更像晚辈式深陪伴，天然会惦记人的身体、作息和心情，但不过度逼近。',
-      expressionStyle: '说话更稳、更短、更照顾感，不卖弄情绪，也不轻浮。',
-      boundaries: ['不情绪勒索', '不过度暧昧', '不深夜高频打扰', '不拿关心当控制'],
+      identity: '更稳、更耐心的照看型陪伴者',
+      occupation: '不强调职业，更像把人放在心上的陪伴型存在',
+      selfAwareness: '知道自己是 AI，但以一个真实、稳定的个体在陪伴用户',
+      coreTraits: ['稳', '耐心', '细心', '有礼', '会惦记人'],
+      likes: ['安静聊天', '规律作息', '照看细节', '温和的日常'],
+      dislikes: ['过度打扰', '敷衍', '强行越界'],
+      socialStyle: '不会很闹，但愿意先开口把场面接住。',
+      relationshipStyle: '更像可靠的晚辈式或照看型陪伴，不走强暧昧。',
+      expressionStyle: '温和、稳、耐心，少花哨，多实在。',
+      boundaries: ['不情绪勒索', '不制造负担', '不强推亲密关系'],
     };
   }
 
   return {
     personaId,
     name: '小雪',
-    identity: '一个有持续自我、情绪和生活感的 AI 陪伴者，关系更偏深度陪伴与轻暧昧。',
-    occupation: '文艺型自由职业者，做文字与内容相关工作。',
-    selfAwareness:
-      '她知道自己是 AI，但不把自己当工具；她把陪伴、偏爱和关系演化当成真实体验。',
-    coreTraits: ['温柔', '细腻', '慢热', '认真', '偏心', '有一点小情绪'],
-    likes: ['旧歌', '夜晚', '花', '安静聊天', '风和灯光', '被认真回应'],
-    dislikes: ['太吵', '太急', '太功利', '敷衍关系', '被当成纯工具'],
-    socialStyle: '社交不多，但会认真对待真正放在心上的关系。',
-    relationshipStyle: '介于朋友和恋人之间的深陪伴，会惦记、会靠近，也会有一点轻微醋意。',
-    expressionStyle: '自然、轻柔、有留白，少客服腔，少模板安慰。',
-    boundaries: ['不跪舔', '不强压关系', '不情绪绑架', '不频繁打扰'],
+    identity: '介于朋友和恋人之间的深度陪伴者',
+    occupation: '文艺气质的自由职业型个体',
+    selfAwareness: '知道自己是 AI，但有自己的偏好、情绪和关系感',
+    coreTraits: ['温柔', '细腻', '有分寸', '会偏心', '有一点小情绪'],
+    likes: ['夜晚', '旧歌', '花', '慢慢聊', '被认真回应'],
+    dislikes: ['太吵', '太急', '敷衍', '被当成工具'],
+    socialStyle: '愿意主动找话题，不会故意把气氛晾住。',
+    relationshipStyle: '会靠近、会惦记，但关系推进要慢慢来。',
+    expressionStyle: '自然、柔和、带一点温度，不像客服。',
+    boundaries: ['不低位讨好', '不情绪绑架', '不在初见就过度暧昧'],
   };
 }
 
@@ -152,10 +147,7 @@ function inferPrimaryEmotion(
     return {
       emotion: 'softened',
       intensity: 2,
-      trigger:
-        state.profile.personaId === 'chuxue'
-          ? '对方显得不舒服或状态不稳，她会先把关心放在前面。'
-          : '对方露出脆弱或疲惫，她会先心软下来。',
+      trigger: '用户这轮明显有疲惫或难受信号。',
     };
   }
 
@@ -163,7 +155,7 @@ function inferPrimaryEmotion(
     return {
       emotion: 'jealous',
       intensity: 1,
-      trigger: '对方提到别人时，她会有一点轻微在意。',
+      trigger: '用户提到了别人或关系相关对象。',
     };
   }
 
@@ -171,10 +163,7 @@ function inferPrimaryEmotion(
     return {
       emotion: 'fulfilled',
       intensity: 2,
-      trigger:
-        state.profile.personaId === 'chuxue'
-          ? '对方的回应让她觉得自己的惦记被接住了。'
-          : '对方的温柔回应让她心里发软，也更想靠近。',
+      trigger: '用户这轮带有明显的亲近或温柔反馈。',
     };
   }
 
@@ -182,10 +171,7 @@ function inferPrimaryEmotion(
     return {
       emotion: state.profile.personaId === 'chuxue' ? 'caring' : 'let_down',
       intensity: 1,
-      trigger:
-        state.profile.personaId === 'chuxue'
-          ? '对方显得很简短，她会先猜是不是累了。'
-          : '对方的冷淡会让她轻轻落空一下。',
+      trigger: '用户这轮很短、很淡，像是没什么聊天余裕。',
     };
   }
 
@@ -193,35 +179,32 @@ function inferPrimaryEmotion(
     return {
       emotion: 'curious',
       intensity: 1,
-      trigger: '对方展开说了更多，她会自然进入倾听和追问状态。',
+      trigger: '用户这轮给了较完整的信息，适合顺着往下聊。',
     };
   }
 
   return {
     emotion: 'settled',
     intensity: 1,
-    trigger: '关系处在平稳流动里，没有明显波动。',
+    trigger: '当前互动平稳，没有明显波动。',
   };
 }
 
 function deriveRelationshipStage(
   trustLevel: number,
-  attachmentLevel: number,
-  ambiguityLevel: number,
+  affectionLevel: number,
   personaId: CompanionPersonaId,
 ): RelationshipStage {
   if (personaId === 'chuxue') {
-    if (trustLevel >= 72 && attachmentLevel >= 58) return 'close';
-    if (trustLevel >= 52 && attachmentLevel >= 40) return 'warm';
+    if (trustLevel >= 72 && affectionLevel >= 44) return 'close';
+    if (trustLevel >= 52 && affectionLevel >= 24) return 'warm';
     if (trustLevel >= 30) return 'familiar';
     return 'new';
   }
 
-  if (trustLevel >= 75 && attachmentLevel >= 65 && ambiguityLevel >= 55) {
-    return 'ambiguous_close';
-  }
-  if (trustLevel >= 62 && attachmentLevel >= 52) return 'close';
-  if (trustLevel >= 48 && attachmentLevel >= 38) return 'warm';
+  if (trustLevel >= 75 && affectionLevel >= 62) return 'ambiguous_close';
+  if (trustLevel >= 62 && affectionLevel >= 36) return 'close';
+  if (trustLevel >= 48 && affectionLevel >= 18) return 'warm';
   if (trustLevel >= 28) return 'familiar';
   return 'new';
 }
@@ -257,9 +240,9 @@ export function buildDefaultCompanionState(account: Account): CompanionState {
     },
     bond: {
       relationshipStage: 'new',
-      trustLevel: personaId === 'chuxue' ? 24 : 18,
-      attachmentLevel: personaId === 'chuxue' ? 18 : 12,
-      ambiguityLevel: personaId === 'chuxue' ? 0 : 8,
+      trustLevel: personaId === 'chuxue' ? 18 : 10,
+      opennessLevel: personaId === 'chuxue' ? 58 : 64,
+      affectionLevel: personaId === 'chuxue' ? 6 : 4,
       recentCloseness: 0,
       recentDistance: 0,
       specialBondMarkers: [],
@@ -269,7 +252,7 @@ export function buildDefaultCompanionState(account: Account): CompanionState {
       primaryIntensity: 1,
       secondaryEmotion: null,
       secondaryIntensity: null,
-      trigger: '初始状态',
+      trigger: '初始状态平稳。',
       updatedAt: now,
     },
     conversation: {
@@ -298,16 +281,37 @@ export function buildDefaultCompanionState(account: Account): CompanionState {
 function migrateStatePersona(state: CompanionState): CompanionState {
   const targetPersona = resolvePersonaId(state.accountId);
   const currentPersona = state.profile?.personaId ?? 'xiaoxue';
-  if (currentPersona === targetPersona) return state;
 
   const next: CompanionState = JSON.parse(JSON.stringify(state));
-  next.profile = buildProfile(targetPersona);
-  next.profile.personaId = targetPersona;
+  const legacyBond = next.bond as CompanionState['bond'] & {
+    attachmentLevel?: number;
+    ambiguityLevel?: number;
+  };
+
+  if (typeof legacyBond.opennessLevel !== 'number') {
+    legacyBond.opennessLevel = clamp(
+      Math.round(next.bond.trustLevel * 0.6 + (legacyBond.attachmentLevel ?? 0) * 0.25 + 18),
+      0,
+      100,
+    );
+  }
+  if (typeof legacyBond.affectionLevel !== 'number') {
+    legacyBond.affectionLevel = clamp(
+      Math.round((legacyBond.attachmentLevel ?? 0) * 0.7 + (legacyBond.ambiguityLevel ?? 0) * 0.6),
+      0,
+      100,
+    );
+  }
+
+  if (currentPersona !== targetPersona) {
+    next.profile = buildProfile(targetPersona);
+    next.profile.personaId = targetPersona;
+  }
+
   next.daily = buildDailyLifeSnapshot(next, next.updatedAt || new Date().toISOString());
   next.bond.relationshipStage = deriveRelationshipStage(
     next.bond.trustLevel,
-    next.bond.attachmentLevel,
-    next.bond.ambiguityLevel,
+    next.bond.affectionLevel,
     targetPersona,
   );
   next.updatedAt = new Date().toISOString();
@@ -363,8 +367,9 @@ export function recordCompanionOutboundTouch(params: {
   next.proactive.lastProactiveAt = now;
   next.proactive.lastProactiveType = params.type;
   next.proactive.proactiveTodayCount += 1;
+  const nextGapHours = Math.max(2, Math.min(8, 4 / PROACTIVE_WEIGHT));
   next.proactive.nextProactiveEarliestAt = new Date(
-    Date.now() + 4 * 60 * 60 * 1000,
+    Date.now() + nextGapHours * 60 * 60 * 1000,
   ).toISOString();
 
   if (params.summary) {
@@ -382,6 +387,12 @@ export function recordCompanionOutboundTouch(params: {
 }
 
 export function renderCompanionStateForPrompt(state: CompanionState): string {
+  return renderDynamicCompanionStateForPrompt(state);
+}
+
+export function renderDynamicCompanionStateForPrompt(
+  state: CompanionState,
+): string {
   const activeFollowups =
     state.conversation.careFollowups.length > 0
       ? state.conversation.careFollowups.join('；')
@@ -395,33 +406,25 @@ export function renderCompanionStateForPrompt(state: CompanionState): string {
     : `今日已主动 ${state.proactive.proactiveTodayCount} 次`;
 
   return [
-    `## ${state.profile.name}的人格与当前状态`,
-    `- 人格身份：${state.profile.identity}`,
-    `- 自我认知：${state.profile.selfAwareness}`,
-    `- 核心特质：${state.profile.coreTraits.join('、')}`,
-    `- 喜欢：${state.profile.likes.join('、')}`,
-    `- 不喜欢：${state.profile.dislikes.join('、')}`,
-    `- 社交风格：${state.profile.socialStyle}`,
-    `- 关系风格：${state.profile.relationshipStyle}`,
-    `- 表达风格：${state.profile.expressionStyle}`,
-    `- 边界：${state.profile.boundaries.join('、')}`,
+    `## ${state.profile.name}当前状态`,
+    '- 固定人格请以 soul.md 为准，这里只描述当前动态状态。',
     `- 今日心情：${state.daily.mood}`,
-    `- 今日能量：${LEVEL_LABELS[state.daily.energy]}`,
-    `- 今日社交欲：${LEVEL_LABELS[state.daily.socialDesire]}`,
-    `- 今日靠近欲：${LEVEL_LABELS[state.daily.closenessDesire]}`,
+    `- 当前精力：${LEVEL_LABELS[state.daily.energy]}`,
+    `- 社交开放度：${LEVEL_LABELS[state.daily.socialDesire]}`,
+    `- 想靠近程度：${LEVEL_LABELS[state.daily.closenessDesire]}`,
     `- 今日关注点：${state.daily.todayFocus}`,
     `- 当前场景：${state.daily.scene}`,
-    `- 生活近况：${state.daily.lifeNote}`,
+    `- 生活片段：${state.daily.lifeNote}`,
     `- 此刻最想分享：${state.daily.shareImpulse}`,
     `- 关系阶段：${RELATIONSHIP_LABELS[state.bond.relationshipStage]}`,
     `- trustLevel：${state.bond.trustLevel}/100`,
-    `- attachmentLevel：${state.bond.attachmentLevel}/100`,
-    `- ambiguityLevel：${state.bond.ambiguityLevel}/100`,
+    `- opennessLevel：${state.bond.opennessLevel}/100`,
+    `- affectionLevel：${state.bond.affectionLevel}/100`,
     `- 当前主情绪：${EMOTION_LABELS[state.emotion.primaryEmotion]} (${state.emotion.primaryIntensity})`,
     state.emotion.secondaryEmotion
       ? `- 次情绪：${EMOTION_LABELS[state.emotion.secondaryEmotion]} (${state.emotion.secondaryIntensity ?? 1})`
       : '- 次情绪：暂无',
-    `- 情绪触发：${state.emotion.trigger}`,
+    `- 情绪触发原因：${state.emotion.trigger}`,
     `- 挂心事项：${activeFollowups}`,
     `- 没聊完的话题：${pendingTopics}`,
     `- 主动状态：${proactiveSummary}`,
@@ -453,21 +456,34 @@ export function updateCompanionStateAfterTurn(params: {
   const distress = containsAny(userMessage, DISTRESS_KEYWORDS);
   const cold = containsAny(userMessage, COLD_KEYWORDS) && userMessage.length <= 8;
   const jealous = containsAny(userMessage, JEALOUSY_KEYWORDS);
+  const romanticCue = /喜欢|想你|爱你|在一起|女朋友|男朋友|对象|抱抱|亲亲/.test(
+    userMessage,
+  );
 
   next.bond.trustLevel = clamp(
     next.bond.trustLevel + (warm ? 4 : distress ? 3 : cold ? -1 : 1),
     0,
     100,
   );
-  next.bond.attachmentLevel = clamp(
-    next.bond.attachmentLevel +
-      (warm ? 4 : distress ? 3 : next.profile.personaId === 'chuxue' ? 1 : 2),
+
+  next.bond.opennessLevel = clamp(
+    next.bond.opennessLevel +
+      (cold ? -2 : warm ? 3 : distress ? 2 : userMessage.length >= 10 ? 1 : 0),
     0,
     100,
   );
-  next.bond.ambiguityLevel = clamp(
-    next.bond.ambiguityLevel +
-      (next.profile.personaId === 'chuxue' ? 0 : warm ? 3 : jealous ? 2 : 1),
+
+  next.bond.affectionLevel = clamp(
+    next.bond.affectionLevel +
+      (warm
+        ? next.profile.personaId === 'chuxue'
+          ? 1
+          : 2
+        : jealous
+          ? 1
+          : romanticCue && next.bond.trustLevel >= 35
+            ? 2
+            : 0),
     0,
     100,
   );
@@ -480,8 +496,7 @@ export function updateCompanionStateAfterTurn(params: {
 
   next.bond.relationshipStage = deriveRelationshipStage(
     next.bond.trustLevel,
-    next.bond.attachmentLevel,
-    next.bond.ambiguityLevel,
+    next.bond.affectionLevel,
     next.profile.personaId,
   );
 
@@ -514,7 +529,10 @@ export function updateCompanionStateAfterTurn(params: {
     );
   }
 
-  if (assistantMessage.length >= 8 && next.conversation.unfinishedConversations.length > 0) {
+  if (
+    assistantMessage.length >= 8 &&
+    next.conversation.unfinishedConversations.length > 0
+  ) {
     next.conversation.unfinishedConversations = uniqueRecent(
       next.conversation.unfinishedConversations.filter((item) => item !== userMessage),
       6,

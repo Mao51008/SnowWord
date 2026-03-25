@@ -122,8 +122,8 @@ export interface CompanionDailyState {
 export interface CompanionBondState {
   relationshipStage: RelationshipStage;
   trustLevel: number;
-  attachmentLevel: number;
-  ambiguityLevel: number;
+  opennessLevel: number;
+  affectionLevel: number;
   recentCloseness: number;
   recentDistance: number;
   specialBondMarkers: string[];

@@ -20,8 +20,10 @@ import {
   createAccount,
   deleteAccount,
   getAccount,
+  getAccountSettings,
   getAllAccounts,
   getRecentMessages,
+  getTasksForAccount,
   initDatabase,
   storeMessage,
   upsertAccountSettings,
@@ -29,7 +31,7 @@ import {
 } from './db.js';
 import {
   ensureCompanionState,
-  renderCompanionStateForPrompt,
+  renderDynamicCompanionStateForPrompt,
   saveCompanionState,
   updateCompanionStateAfterTurn,
 } from './companion-state.js';
@@ -39,7 +41,17 @@ import { logger } from './logger.js';
 import { Account, CompanionPersonaId, NewMessage } from './types.js';
 import { buildReactionPolicy } from './reaction-policy.js';
 import { extractAndPersistPersonalMemories } from './memory-extractor.js';
-import { capturePreferredNameMemory } from './user-memory.js';
+import {
+  capturePreferredNameMemory,
+  compactStructuredMemories,
+} from './user-memory.js';
+import { tryAutoScheduleReminderFromUserText } from './agent-tools.js';
+import {
+  clearSoulMemorySection,
+  ensureSoulFile,
+  setCustomPersonaPrompt,
+  setSoulPersonaTemplate,
+} from './soul.js';
 import {
   getUpdates,
   interruptPendingOutbound,
@@ -203,8 +215,8 @@ function clearConversationBuffersForAccount(accountId: string): void {
 
 function clearSoulMemory(accountId: string): void {
   const soulPath = getSoulPath(accountId);
-  fs.mkdirSync(path.dirname(soulPath), { recursive: true });
-  fs.writeFileSync(soulPath, '', 'utf-8');
+  const personaId = getAccountSettings(accountId)?.persona_id ?? 'xiaoxue';
+  clearSoulMemorySection({ soulPath, personaId });
 }
 
 function normalizePersonaInput(raw: string): CompanionPersonaId | null {
@@ -229,6 +241,7 @@ async function sendCommandReply(params: {
     params.to,
     params.text,
     params.contextToken,
+    { disableSplit: true },
   );
 }
 
@@ -262,6 +275,10 @@ async function handleSlashCommand(params: {
       }
 
       upsertAccountSettings(params.account.id, { persona_id: personaId });
+      setSoulPersonaTemplate({
+        soulPath: params.account.soul_md_path,
+        personaId,
+      });
       const nextState = ensureCompanionState(params.account);
       saveCompanionState(nextState);
       await sendCommandReply({
@@ -330,16 +347,14 @@ async function handleSlashCommand(params: {
 
     case '/persona-prompt':
     case '/自定义人格提示词': {
-      upsertAccountSettings(params.account.id, {
-        custom_persona_prompt: argument,
-      });
+      setCustomPersonaPrompt(params.account.soul_md_path, argument);
       await sendCommandReply({
         account: params.account,
         to: params.sender,
         contextToken: params.contextToken,
         text: argument
-          ? '已保存自定义人格提示词。目前接口已预留，暂未接入实际 prompt。'
-          : '已清空自定义人格提示词。目前接口已预留，暂未接入实际 prompt。',
+          ? '已写入自定义人格补充，后续对话会按新的 soul.md 人设生效。'
+          : '已清空自定义人格补充，当前会恢复使用基础人设模板。',
       });
       return true;
     }
@@ -379,7 +394,7 @@ function buildConversationPrompt(params: {
     params.isFirstContact ? firstContactRequirement : null,
     params.companionContext,
     params.replyPolicy ? `## 回复策略\n${params.replyPolicy}` : null,
-    '## 用户长期记忆',
+    '## 人格档案与长期记忆',
     soulContent,
     '## 近期对话',
     recentContext,
@@ -391,6 +406,38 @@ function buildConversationPrompt(params: {
   ].filter(Boolean);
 
   return sections.join('\n\n');
+}
+
+function looksLikeReminderIntent(text: string): boolean {
+  return /(提醒|记得|别忘|叫我)/.test(text);
+}
+
+function maybeAutoScheduleReminder(params: {
+  account: Account;
+  userMessage: string;
+  tasksBeforeCount: number;
+  log: Pick<typeof logger, 'info'>;
+  scope: Record<string, unknown>;
+}): void {
+  if (!looksLikeReminderIntent(params.userMessage)) return;
+
+  const tasksAfterCount = getTasksForAccount(params.account.id).length;
+  if (tasksAfterCount > params.tasksBeforeCount) return;
+
+  const fallback = tryAutoScheduleReminderFromUserText({
+    accountId: params.account.id,
+    userText: params.userMessage,
+  });
+
+  if (fallback.created) {
+    params.log.info(
+      {
+        ...params.scope,
+        taskId: fallback.taskId,
+      },
+      'Auto-scheduled reminder from user request because the model did not create one',
+    );
+  }
 }
 
 // =====================
@@ -479,7 +526,7 @@ async function processWeixinMessage(
     companionName: companionState.profile.name,
     recentContext: contextLines,
     soulContent,
-    companionContext: renderCompanionStateForPrompt(companionState),
+    companionContext: renderDynamicCompanionStateForPrompt(companionState),
     latestUserMessage: content,
     replyPolicy: (() => {
       const policy = buildReactionPolicy(companionState, content);
@@ -499,6 +546,7 @@ async function processWeixinMessage(
     'Built agent prompt',
   );
 
+  const tasksBeforeCount = getTasksForAccount(account.id).length;
   let response: string;
   try {
     const output = await runContainerAgent({
@@ -529,6 +577,14 @@ async function processWeixinMessage(
     log.error({ err }, 'Container agent failed');
     response = '抱歉，我这边刚刚短暂走神了一下，您稍后再和我说一句。';
   }
+
+  maybeAutoScheduleReminder({
+    account,
+    userMessage: content,
+    tasksBeforeCount,
+    log,
+    scope: { msg_id: msgId, sender },
+  });
 
   let replySent = false;
   try {
@@ -666,7 +722,7 @@ async function flushConversationBuffer(key: string): Promise<void> {
     companionName: companionState.profile.name,
     recentContext: contextLines,
     soulContent,
-    companionContext: renderCompanionStateForPrompt(companionState),
+    companionContext: renderDynamicCompanionStateForPrompt(companionState),
     latestUserMessage: mergedUserMessage,
     replyPolicy: (() => {
       const policy = buildReactionPolicy(companionState, mergedUserMessage);
@@ -687,6 +743,7 @@ async function flushConversationBuffer(key: string): Promise<void> {
     'Built agent prompt',
   );
 
+  const tasksBeforeCount = getTasksForAccount(account.id).length;
   let response: string;
   try {
     const output = await runContainerAgent({
@@ -717,6 +774,14 @@ async function flushConversationBuffer(key: string): Promise<void> {
     log.error({ err, first_msg_id: firstMsgId }, 'Container agent failed');
     response = 'æŠ±æ­‰ï¼Œæˆ‘è¿™è¾¹åˆšåˆšçŸ­æš‚èµ°ç¥žäº†ä¸€ä¸‹ï¼Œæ‚¨ç¨åŽå†å’Œæˆ‘è¯´ä¸€å¥ã€‚';
   }
+
+  maybeAutoScheduleReminder({
+    account,
+    userMessage: mergedUserMessage,
+    tasksBeforeCount,
+    log,
+    scope: { first_msg_id: firstMsgId, sender },
+  });
 
   let replySent = false;
   try {
@@ -963,6 +1028,7 @@ export async function addAccount(
     `# ${name} 的记忆\n\n## 基本信息\n- 姓名：${name}\n\n## 重要事件\n\n`,
   );
 
+  ensureSoulFile({ soulPath, personaId: 'xiaoxue' });
   createAccount(account);
   ensureCompanionState(account);
   logger.info({ accountId: resolvedAccountId, name }, 'Account created');
@@ -1093,6 +1159,11 @@ export async function main(): Promise<void> {
 
   for (const account of accounts) {
     ensureDirectories(account.id);
+    ensureSoulFile({
+      soulPath: account.soul_md_path,
+      personaId: getAccountSettings(account.id)?.persona_id ?? 'xiaoxue',
+    });
+    compactStructuredMemories({ account });
     ensureCompanionState(account);
   }
 

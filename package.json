@@ -1,6 +1,6 @@
 {
   "name": "SnowWord",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "SnowWord is a WeChat AI companion runtime with memory, reminders, proactive messaging, and weather-aware extensions.",
   "type": "module",
   "main": "dist/index.js",

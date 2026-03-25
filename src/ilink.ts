@@ -71,6 +71,10 @@ export interface SendMessageResult {
   totalSegments: number;
 }
 
+export interface SendMessageOptions {
+  disableSplit?: boolean;
+}
+
 const outboundSendVersions = new Map<string, number>();
 const activeOutboundKeys = new Set<string>();
 
@@ -417,8 +421,17 @@ export async function sendMessage(
   toUserId: string,
   text: string,
   contextToken?: string,
+  options: SendMessageOptions = {},
 ): Promise<SendMessageResult> {
-  const segments = splitOutboundText(text);
+  const normalizedSingle = stripParentheticalActions(text)
+    .replace(/\r/g, '')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+  const segments = options.disableSplit
+    ? normalizedSingle
+      ? [normalizedSingle]
+      : []
+    : splitOutboundText(text);
   const outgoing = segments.length > 0 ? segments : ['...'];
   let lastClientId = '';
   const outboundKey = getOutboundKey(account.id, toUserId);

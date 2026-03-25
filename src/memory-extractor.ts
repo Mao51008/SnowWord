@@ -67,6 +67,17 @@ function getDefaultImportance(tags: string[]): number {
   return 3;
 }
 
+function shouldPersistMemoryItem(content: string): boolean {
+  const relativeTimePattern =
+    /(今天|明天|后天|今晚|今早|今晨|本周|下周|周[一二三四五六日天]|星期[一二三四五六日天]|早上|上午|中午|下午|傍晚|晚上)/;
+
+  if (content.includes('生日') && relativeTimePattern.test(content)) {
+    return false;
+  }
+
+  return true;
+}
+
 function extractJsonObject(text: string): string | null {
   const fenced = text.match(/```json\s*([\s\S]*?)```/i);
   if (fenced) return fenced[1].trim();
@@ -220,6 +231,11 @@ export async function extractAndPersistPersonalMemories(args: {
       const content = item.content?.trim();
       const tags = Array.isArray(item.tags) ? item.tags.filter(Boolean) : [];
       if (!content || !content.startsWith('用户')) {
+        skipped += 1;
+        continue;
+      }
+
+      if (!shouldPersistMemoryItem(content)) {
         skipped += 1;
         continue;
       }

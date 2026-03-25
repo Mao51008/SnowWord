@@ -110,8 +110,8 @@ async function cmdState(arg?: string): Promise<void> {
   console.log('【关系】');
   console.log(`阶段: ${state.bond.relationshipStage}`);
   console.log(`trustLevel: ${state.bond.trustLevel}`);
-  console.log(`attachmentLevel: ${state.bond.attachmentLevel}`);
-  console.log(`ambiguityLevel: ${state.bond.ambiguityLevel}`);
+  console.log(`opennessLevel: ${state.bond.opennessLevel}`);
+  console.log(`affectionLevel: ${state.bond.affectionLevel}`);
   console.log(`recentCloseness: ${state.bond.recentCloseness}`);
   console.log(`recentDistance: ${state.bond.recentDistance}`);
   console.log('');

@@ -7,11 +7,16 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  DATA_DIR,
+  PROACTIVE_WEIGHT,
+  SCHEDULER_POLL_INTERVAL,
+  TIMEZONE,
+} from './config.js';
 import {
   ensureCompanionState,
   recordCompanionOutboundTouch,
-  renderCompanionStateForPrompt,
+  renderDynamicCompanionStateForPrompt,
   saveCompanionState,
 } from './companion-state.js';
 import { runContainerAgent } from './container-runner.js';
@@ -32,6 +37,16 @@ import { NewMessage, ScheduledTask } from './types.js';
 import { getWeatherSummary } from './weather.js';
 
 const HOUR_MS = 60 * 60 * 1000;
+
+function scaledHours(baseHours: number): number {
+  return Math.max(1, Math.round((baseHours / PROACTIVE_WEIGHT) * 10) / 10);
+}
+
+function getDailyProactiveLimit(): number {
+  if (PROACTIVE_WEIGHT >= 1.5) return 4;
+  if (PROACTIVE_WEIGHT <= 0.6) return 2;
+  return 3;
+}
 
 export function computeNextRun(task: ScheduledTask): string | null {
   if (task.schedule_type === 'once') return null;
@@ -163,10 +178,14 @@ function getProactiveCandidate(accountId: string): {
   const nextEarliest = parseTime(state.proactive.nextProactiveEarliestAt);
 
   if (!lastUserAt) return null;
-  if (state.proactive.proactiveTodayCount >= 3) return null;
+  if (state.proactive.proactiveTodayCount >= getDailyProactiveLimit()) return null;
   if (nextEarliest && now < nextEarliest) return null;
-  if (lastProactiveAt && now - lastProactiveAt < 4 * HOUR_MS) return null;
-  if (lastProactiveAt && lastProactiveAt > lastUserAt && now - lastProactiveAt < 12 * HOUR_MS) {
+  if (lastProactiveAt && now - lastProactiveAt < scaledHours(4) * HOUR_MS) return null;
+  if (
+    lastProactiveAt &&
+    lastProactiveAt > lastUserAt &&
+    now - lastProactiveAt < scaledHours(12) * HOUR_MS
+  ) {
     return null;
   }
 
@@ -174,7 +193,7 @@ function getProactiveCandidate(accountId: string): {
 
   if (
     state.conversation.careFollowups.length > 0 &&
-    silenceMs >= 2 * HOUR_MS
+    silenceMs >= scaledHours(2) * HOUR_MS
   ) {
     return {
       type: 'caring',
@@ -184,7 +203,7 @@ function getProactiveCandidate(accountId: string): {
 
   if (
     state.conversation.pendingTopics.length > 0 &&
-    silenceMs >= 8 * HOUR_MS
+    silenceMs >= scaledHours(8) * HOUR_MS
   ) {
     return {
       type: 'continuing',
@@ -192,14 +211,14 @@ function getProactiveCandidate(accountId: string): {
     };
   }
 
-  if (state.bond.trustLevel >= 22 && silenceMs >= 10 * HOUR_MS) {
+  if (state.bond.opennessLevel >= 48 && silenceMs >= scaledHours(8) * HOUR_MS) {
     return {
       type: 'sharing',
       reason: `你今天有一点自己的生活感想说给用户听：${state.daily.shareImpulse}`,
     };
   }
 
-  if (state.bond.trustLevel >= 30 && silenceMs >= 18 * HOUR_MS) {
+  if (state.bond.opennessLevel >= 60 && silenceMs >= scaledHours(14) * HOUR_MS) {
     return {
       type: 'checking_in',
       reason: '已经安静了一段时间，你有点惦记用户，适合轻轻问候一下。',
@@ -232,7 +251,7 @@ async function maybeSendProactiveMessage(accountId: string): Promise<void> {
       }${weather.advice ? `，${weather.advice}` : ''}`
     : null;
   const prompt = buildProactivePrompt({
-    companionContext: renderCompanionStateForPrompt(state),
+    companionContext: renderDynamicCompanionStateForPrompt(state),
     reason: candidate.reason,
     careFollowups: state.conversation.careFollowups,
     pendingTopics: state.conversation.pendingTopics,
@@ -351,7 +370,7 @@ async function runTask(task: ScheduledTask): Promise<void> {
       accountId: task.account_id,
       prompt: buildReminderPrompt(
         task,
-        renderCompanionStateForPrompt(companionState),
+        renderDynamicCompanionStateForPrompt(companionState),
       ),
       sessionId: undefined,
       personaId: companionState.profile.personaId,
