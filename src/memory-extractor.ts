@@ -1,7 +1,7 @@
 import { AGENT_MODEL } from './config.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
-import { persistStructuredMemory } from './user-memory.js';
+import { compactStructuredMemories, persistStructuredMemory } from './user-memory.js';
 import { Account } from './types.js';
 
 type Provider = 'openai' | 'anthropic';
@@ -249,6 +249,10 @@ export async function extractAndPersistPersonalMemories(args: {
 
       if (result.created) created += 1;
       else skipped += 1;
+    }
+
+    if (created > 0) {
+      compactStructuredMemories({ account: args.account });
     }
 
     return { created, skipped };

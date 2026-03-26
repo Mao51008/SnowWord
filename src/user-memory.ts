@@ -90,6 +90,140 @@ function getPrimarySingularTag(tags: string): string | null {
   return null;
 }
 
+function normalizeClockTime(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function extractClockTimes(text: string): string[] {
+  const times = new Set<string>();
+
+  for (const match of text.matchAll(/\b(\d{1,2})[:：](\d{2})\b/g)) {
+    const hour = Number.parseInt(match[1], 10);
+    const minute = Number.parseInt(match[2], 10);
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      times.add(normalizeClockTime(hour, minute));
+    }
+  }
+
+  for (const match of text.matchAll(
+    /(凌晨|早上|上午|中午|下午|傍晚|晚上|夜里)?\s*(\d{1,2})\s*(?:点|时)(?:(\d{1,2})分?)?/g,
+  )) {
+    const period = match[1] ?? '';
+    let hour = Number.parseInt(match[2], 10);
+    const minute = match[3] ? Number.parseInt(match[3], 10) : 0;
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) continue;
+    if (minute < 0 || minute > 59) continue;
+
+    if (/(下午|傍晚|晚上)/.test(period) && hour < 12) {
+      hour += 12;
+    } else if (period === '中午' && hour < 11) {
+      hour += 12;
+    } else if (/(凌晨|夜里)/.test(period) && hour === 12) {
+      hour = 0;
+    }
+
+    if (hour >= 0 && hour <= 23) {
+      times.add(normalizeClockTime(hour, minute));
+    }
+  }
+
+  return Array.from(times).sort();
+}
+
+function buildMemoryGroupKey(content: string, tags: string): string | null {
+  const text = normalizeText(content);
+  const tagList = parseTags(tags);
+  const hasTag = (tag: string) => tagList.includes(tag);
+
+  if (
+    /(吃药|服药|药物|药片|用药|提醒吃药|提醒服药)/.test(text) ||
+    hasTag('medication') ||
+    hasTag('health')
+  ) {
+    const times = extractClockTimes(text);
+    if (times.length > 0) {
+      return `group:medication_schedule:${times.join('|')}`;
+    }
+    return 'group:medication';
+  }
+
+  if (
+    /(毕业设计|写论文|论文|毕业压力|无法毕业|毕不了业|临近毕业|即将毕业)/.test(text) ||
+    (/(学生)/.test(text) && /(毕业|论文)/.test(text))
+  ) {
+    return 'group:education_graduation_pressure';
+  }
+
+  if (
+    /(玩牌)/.test(text) &&
+    /(每天|晚上|夜里|朋友|放松|习惯)/.test(text)
+  ) {
+    return 'group:hobby_playing_cards';
+  }
+
+  if (
+    /(睡到|起床|晚起|熬夜|作息|自然醒)/.test(text) &&
+    /(十点半|十点多|10[:：]30|上午十点|早上十点|作息偏晚|晚起)/.test(text)
+  ) {
+    const times = extractClockTimes(text);
+    const wakeTime = times.find((time) => time === '10:30') ?? times[0] ?? '10:30';
+    return `group:sleep_late_wakeup:${wakeTime}`;
+  }
+
+  if (/(妈妈|母亲)/.test(text)) {
+    return 'group:family_mother';
+  }
+
+  if (/(简洁直接|直接的沟通|沟通方式简洁|说话直接)/.test(text)) {
+    return 'group:preference_direct_communication';
+  }
+
+  return null;
+}
+
+function scoreMemoryQuality(content: string, tags: string, importance: number): number {
+  const normalizedContent = normalizeText(content);
+  const tagCount = parseTags(tags).length;
+  const timeCount = extractClockTimes(normalizedContent).length;
+  return importance * 100 + normalizedContent.length + tagCount * 5 + timeCount * 20;
+}
+
+function isLaterMemory(
+  left: Pick<Memory, 'created_at' | 'accessed_at'>,
+  right: Pick<Memory, 'created_at' | 'accessed_at'>,
+): boolean {
+  if (left.accessed_at !== right.accessed_at) {
+    return left.accessed_at > right.accessed_at;
+  }
+  return left.created_at > right.created_at;
+}
+
+function buildNormalizedMemory(memory: Pick<Memory, 'content' | 'tags' | 'importance'>): {
+  content: string;
+  tags: string;
+  dedupeKey: string;
+  quality: number;
+} {
+  const normalized = normalizeMemoryFact(memory.content, memory.tags);
+  const singularTag = getPrimarySingularTag(normalized.tags);
+  const dedupeKey =
+    singularTag
+      ? `single:${singularTag}`
+      : buildMemoryGroupKey(normalized.content, normalized.tags) ??
+        `fact:${normalized.tags}:${normalized.content}`;
+
+  return {
+    content: normalized.content,
+    tags: normalized.tags,
+    dedupeKey,
+    quality: scoreMemoryQuality(
+      normalized.content,
+      normalized.tags,
+      memory.importance,
+    ),
+  };
+}
+
 function parsePreferredName(text: string): string | null {
   const patterns = [
     /(?:你可以叫我|可以叫我|叫我|喊我|称呼我)([^，。！？\s"'“”‘’]{1,12})/,
@@ -282,24 +416,30 @@ export function compactStructuredMemories(args: {
       importance: number;
       created_at: string;
       accessed_at: string;
+      quality: number;
     }
   >();
 
   for (const memory of memories) {
-    const normalized = normalizeMemoryFact(memory.content, memory.tags);
-    const singularTag = getPrimarySingularTag(normalized.tags);
-    const key = singularTag
-      ? `single:${singularTag}`
-      : `fact:${normalized.tags}:${normalized.content}`;
+    const normalized = buildNormalizedMemory(memory);
+    const current = kept.get(normalized.dedupeKey);
 
-    if (kept.has(key)) continue;
+    if (
+      current &&
+      (current.quality > normalized.quality ||
+        (current.quality === normalized.quality &&
+          isLaterMemory(current, memory)))
+    ) {
+      continue;
+    }
 
-    kept.set(key, {
+    kept.set(normalized.dedupeKey, {
       content: normalized.content,
       tags: normalized.tags,
       importance: memory.importance,
       created_at: memory.created_at,
       accessed_at: memory.accessed_at,
+      quality: normalized.quality,
     });
   }
 
@@ -345,6 +485,14 @@ function deleteConflictingSingleValueMemories(
   }
 }
 
+function deleteMemoriesByDedupeKey(memories: Memory[], dedupeKey: string): void {
+  for (const memory of memories) {
+    if (buildNormalizedMemory(memory).dedupeKey === dedupeKey) {
+      deleteMemory(memory.id);
+    }
+  }
+}
+
 export function extractPreferredName(text: string): PreferredNameCapture | null {
   const preferredName = parsePreferredName(text);
   if (!preferredName) return null;
@@ -361,22 +509,37 @@ export function persistStructuredMemory(args: {
   importance?: number;
   tags?: string;
 }): { created: boolean } {
-  const normalized = normalizeMemoryFact(args.content, args.tags ?? '');
+  const normalized = buildNormalizedMemory({
+    content: args.content,
+    tags: args.tags ?? '',
+    importance: args.importance ?? 3,
+  });
   const content = normalized.content;
   const tags = normalized.tags;
   const currentMemories = getMemoriesForAccount(args.account.id);
-  const existing = currentMemories.find((memory) => {
-    const normalizedExisting = normalizeMemoryFact(memory.content, memory.tags);
-    return (
-      normalizedExisting.content === content && normalizedExisting.tags === tags
-    );
+  const sameKeyMemories = currentMemories.filter(
+    (memory) => buildNormalizedMemory(memory).dedupeKey === normalized.dedupeKey,
+  );
+  const existing = sameKeyMemories.find((memory) => {
+    const normalizedExisting = buildNormalizedMemory(memory);
+    return normalizedExisting.content === content && normalizedExisting.tags === tags;
   });
 
   if (existing) {
     return { created: false };
   }
 
+  const strongerExisting = sameKeyMemories.find((memory) => {
+    const normalizedExisting = buildNormalizedMemory(memory);
+    return normalizedExisting.quality >= normalized.quality;
+  });
+
+  if (strongerExisting) {
+    return { created: false };
+  }
+
   deleteConflictingSingleValueMemories(currentMemories, content, tags);
+  deleteMemoriesByDedupeKey(currentMemories, normalized.dedupeKey);
 
   const now = new Date().toISOString();
   createMemory({
