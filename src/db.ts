@@ -14,6 +14,40 @@ import {
 } from './types.js';
 
 let db: Database.Database;
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_SUBSCRIPTION_DAYS = 9999;
+
+function buildDefaultSubscriptionExpiresAt(now = Date.now()): string {
+  return new Date(now + DEFAULT_SUBSCRIPTION_DAYS * DAY_MS).toISOString();
+}
+
+function buildDefaultAccountSettings(accountId: string): AccountSettings {
+  return {
+    account_id: accountId,
+    persona_id: 'xiaoxue',
+    custom_persona_prompt: '',
+    subscription_expires_at: buildDefaultSubscriptionExpiresAt(),
+    subscription_notice_sent_at: null,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function ensureColumn(
+  database: Database.Database,
+  tableName: string,
+  columnName: string,
+  columnDefinition: string,
+): void {
+  const columns = database
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all() as Array<{ name: string }>;
+
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnDefinition}`);
+}
 
 function createSchema(database: Database.Database): void {
   database.exec(`
@@ -99,10 +133,25 @@ function createSchema(database: Database.Database): void {
       account_id TEXT PRIMARY KEY,
       persona_id TEXT NOT NULL DEFAULT 'xiaoxue',
       custom_persona_prompt TEXT NOT NULL DEFAULT '',
+      subscription_expires_at TEXT,
+      subscription_notice_sent_at TEXT,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (account_id) REFERENCES accounts(id)
     );
   `);
+
+  ensureColumn(
+    database,
+    'account_settings',
+    'subscription_expires_at',
+    'subscription_expires_at TEXT',
+  );
+  ensureColumn(
+    database,
+    'account_settings',
+    'subscription_notice_sent_at',
+    'subscription_notice_sent_at TEXT',
+  );
 }
 
 export function initDatabase(): void {
@@ -532,40 +581,100 @@ export function getAccountSettings(accountId: string): AccountSettings | undefin
     .get(accountId) as AccountSettings | undefined;
 }
 
+export function ensureAccountSettings(accountId: string): AccountSettings {
+  const current = getAccountSettings(accountId);
+  if (!current) {
+    return upsertAccountSettings(accountId, {});
+  }
+
+  const updates: Partial<
+    Pick<
+      AccountSettings,
+      | 'persona_id'
+      | 'custom_persona_prompt'
+      | 'subscription_expires_at'
+      | 'subscription_notice_sent_at'
+    >
+  > = {};
+
+  if (!current.subscription_expires_at) {
+    updates.subscription_expires_at = buildDefaultSubscriptionExpiresAt();
+  }
+  if (current.subscription_notice_sent_at === undefined) {
+    updates.subscription_notice_sent_at = null;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return current;
+  }
+
+  return upsertAccountSettings(accountId, updates);
+}
+
 export function upsertAccountSettings(
   accountId: string,
-  updates: Partial<Pick<AccountSettings, 'persona_id' | 'custom_persona_prompt'>>,
+  updates: Partial<
+    Pick<
+      AccountSettings,
+      | 'persona_id'
+      | 'custom_persona_prompt'
+      | 'subscription_expires_at'
+      | 'subscription_notice_sent_at'
+    >
+  >,
 ): AccountSettings {
   const current =
-    getAccountSettings(accountId) ??
-    ({
-      account_id: accountId,
-      persona_id: 'xiaoxue',
-      custom_persona_prompt: '',
-      updated_at: new Date().toISOString(),
-    } satisfies AccountSettings);
+    getAccountSettings(accountId) ?? buildDefaultAccountSettings(accountId);
 
   const next: AccountSettings = {
     account_id: accountId,
     persona_id: updates.persona_id ?? current.persona_id,
     custom_persona_prompt:
       updates.custom_persona_prompt ?? current.custom_persona_prompt,
+    subscription_expires_at:
+      updates.subscription_expires_at ?? current.subscription_expires_at,
+    subscription_notice_sent_at:
+      updates.subscription_notice_sent_at ?? current.subscription_notice_sent_at,
     updated_at: new Date().toISOString(),
   };
 
   db.prepare(
-    `INSERT INTO account_settings (account_id, persona_id, custom_persona_prompt, updated_at)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO account_settings (
+       account_id,
+       persona_id,
+       custom_persona_prompt,
+       subscription_expires_at,
+       subscription_notice_sent_at,
+       updated_at
+     )
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(account_id) DO UPDATE SET
        persona_id = excluded.persona_id,
        custom_persona_prompt = excluded.custom_persona_prompt,
+       subscription_expires_at = excluded.subscription_expires_at,
+       subscription_notice_sent_at = excluded.subscription_notice_sent_at,
        updated_at = excluded.updated_at`,
   ).run(
     next.account_id,
     next.persona_id,
     next.custom_persona_prompt,
+    next.subscription_expires_at,
+    next.subscription_notice_sent_at,
     next.updated_at,
   );
 
   return next;
+}
+
+export function getSubscriptionRemainingDays(
+  settings: Pick<AccountSettings, 'subscription_expires_at'>,
+  now = Date.now(),
+): number {
+  const expiresAt = Date.parse(settings.subscription_expires_at);
+  if (Number.isNaN(expiresAt)) {
+    return DEFAULT_SUBSCRIPTION_DAYS;
+  }
+
+  const remainingMs = Math.max(0, expiresAt - now);
+  return Math.ceil(remainingMs / DAY_MS);
 }

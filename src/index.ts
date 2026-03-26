@@ -31,6 +31,7 @@ import {
 } from './db.js';
 import {
   ensureCompanionState,
+  recordCompanionOutboundTouch,
   renderDynamicCompanionStateForPrompt,
   saveCompanionState,
   updateCompanionStateAfterTurn,
@@ -38,7 +39,12 @@ import {
 import { runContainerAgent } from './container-runner.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { logger } from './logger.js';
-import { Account, CompanionPersonaId, NewMessage } from './types.js';
+import {
+  Account,
+  CompanionPersonaId,
+  CompanionState,
+  NewMessage,
+} from './types.js';
 import { buildReactionPolicy } from './reaction-policy.js';
 import { extractAndPersistPersonalMemories } from './memory-extractor.js';
 import {
@@ -68,6 +74,12 @@ function previewText(text: string, max = 200): string {
 const INSTANCE_LOCK_PATH = path.join(STORE_DIR, 'runtime.lock.json');
 const INBOUND_BATCH_WINDOW_MS = 4000;
 let shuttingDown = false;
+
+export interface LocalDebugSession {
+  accountId: string;
+  state: CompanionState;
+  transcript: Array<{ role: 'user' | 'assistant'; content: string }>;
+}
 
 interface BufferedInboundMessage {
   msgId: string;
@@ -408,6 +420,133 @@ function buildConversationPrompt(params: {
   return sections.join('\n\n');
 }
 
+function buildReplyPolicyText(
+  state: CompanionState,
+  latestUserMessage: string,
+): string {
+  const policy = buildReactionPolicy(state, latestUserMessage);
+  return `当前场景：${policy.label}\n默认优先短回复。\n本轮总字数尽量不超过 ${policy.maxReplyChars} 个字。\n${policy.guidance}`;
+}
+
+function enforceReplyPolicy(params: {
+  reply: string;
+  state: CompanionState;
+  latestUserMessage: string;
+}): string {
+  let nextReply = params.reply.trim();
+  if (!nextReply) {
+    return nextReply;
+  }
+
+  const policy = buildReactionPolicy(params.state, params.latestUserMessage);
+  for (const forbidden of policy.forbiddenSubstrings ?? []) {
+    if (!forbidden) continue;
+
+    while (nextReply.includes(forbidden)) {
+      if (forbidden === '又') {
+        nextReply = nextReply
+          .replaceAll('又是', '是')
+          .replaceAll('又被', '被')
+          .replaceAll('又在', '在')
+          .replaceAll('又让', '让')
+          .replaceAll('又把', '把')
+          .replaceAll('又给', '给')
+          .replaceAll('又', '');
+      } else {
+        nextReply = nextReply.replaceAll(forbidden, '');
+      }
+    }
+  }
+
+  return nextReply.replace(/\s{2,}/g, ' ').trim();
+}
+
+function readSoulContent(accountId: string): string {
+  const soulPath = getSoulPath(accountId);
+  if (!fs.existsSync(soulPath)) {
+    return '';
+  }
+  return fs.readFileSync(soulPath, 'utf-8');
+}
+
+function buildRecentContextFromMessages(
+  messages: Array<Pick<NewMessage, 'is_from_me' | 'content'>>,
+): string {
+  return messages
+    .map((message) => `${message.is_from_me ? 'Assistant' : 'User'}: ${message.content}`)
+    .join('\n');
+}
+
+async function generateAgentReply(params: {
+  account: Account;
+  companionState: CompanionState;
+  latestUserMessage: string;
+  recentContext: string;
+  isFirstContact: boolean;
+  interruptionNote?: string;
+  logScope?: Record<string, unknown>;
+}): Promise<string> {
+  const log = logger.child({ accountId: params.account.id, ...params.logScope });
+  const soulContent = readSoulContent(params.account.id);
+  const prompt = buildConversationPrompt({
+    account: params.account,
+    companionName: params.companionState.profile.name,
+    recentContext: params.recentContext,
+    soulContent,
+    companionContext: renderDynamicCompanionStateForPrompt(params.companionState),
+    latestUserMessage: params.latestUserMessage,
+    replyPolicy: buildReplyPolicyText(
+      params.companionState,
+      params.latestUserMessage,
+    ),
+    interruptionNote: params.interruptionNote,
+    isFirstContact: params.isFirstContact,
+  });
+
+  log.info(
+    {
+      latest_user_chars: params.latestUserMessage.length,
+      recent_context_chars: params.recentContext.length,
+      soul_chars: soulContent.length,
+      prompt_chars: prompt.length,
+    },
+    'Built prompt for direct agent turn',
+  );
+
+  try {
+    const output = await runContainerAgent({
+      accountId: params.account.id,
+      prompt,
+      sessionId: undefined,
+      latestUserMessage: params.latestUserMessage,
+      personaId: params.companionState.profile.personaId,
+    });
+
+    log.info(
+      {
+        output_status: output.status,
+        output_error: output.error,
+        output_chars: output.result?.length ?? 0,
+        output_preview: output.result ? previewText(output.result, 500) : null,
+      },
+      'Direct agent turn completed',
+    );
+
+    if (output.status === 'error') {
+      return `抱歉，我刚刚有点没接稳这句话。${output.error ?? '请稍后再试。'}`;
+    }
+
+    return enforceReplyPolicy({
+      reply: output.result || '我收到了，正在认真想着怎么回您。',
+      state: params.companionState,
+      latestUserMessage: params.latestUserMessage,
+    });
+  } catch (err) {
+    log.error({ err }, 'Direct agent turn failed');
+    return '抱歉，我这边刚刚短暂走神了一下，您稍后再和我说一句。';
+  }
+}
+
 function looksLikeReminderIntent(text: string): boolean {
   return /(提醒|记得|别忘|叫我)/.test(text);
 }
@@ -571,7 +710,11 @@ async function processWeixinMessage(
     if (output.status === 'error') {
       response = `抱歉，我刚刚有点没接稳这句话。${output.error ?? '请稍后再试。'}`;
     } else {
-      response = output.result || '我收到了，正在认真想着怎么回您。';
+      response = enforceReplyPolicy({
+        reply: output.result || '我收到了，正在认真想着怎么回您。',
+        state: companionState,
+        latestUserMessage: content,
+      });
     }
   } catch (err) {
     log.error({ err }, 'Container agent failed');
@@ -768,7 +911,11 @@ async function flushConversationBuffer(key: string): Promise<void> {
     if (output.status === 'error') {
       response = `æŠ±æ­‰ï¼Œæˆ‘åˆšåˆšæœ‰ç‚¹æ²¡æŽ¥ç¨³è¿™å¥è¯ã€‚${output.error ?? 'è¯·ç¨åŽå†è¯•ã€‚'}`;
     } else {
-      response = output.result || 'æˆ‘æ”¶åˆ°äº†ï¼Œæ­£åœ¨è®¤çœŸæƒ³ç€æ€Žä¹ˆå›žæ‚¨ã€‚';
+      response = enforceReplyPolicy({
+        reply: output.result || 'æˆ‘æ”¶åˆ°äº†ï¼Œæ­£åœ¨è®¤çœŸæƒ³ç€æ€Žä¹ˆå›žæ‚¨ã€‚',
+        state: companionState,
+        latestUserMessage: mergedUserMessage,
+      });
     }
   } catch (err) {
     log.error({ err, first_msg_id: firstMsgId }, 'Container agent failed');
@@ -1030,6 +1177,7 @@ export async function addAccount(
 
   ensureSoulFile({ soulPath, personaId: 'xiaoxue' });
   createAccount(account);
+  upsertAccountSettings(account.id, {});
   ensureCompanionState(account);
   logger.info({ accountId: resolvedAccountId, name }, 'Account created');
 
@@ -1058,6 +1206,148 @@ export function removeAccount(accountId: string): void {
 
 export function listAccounts(): Account[] {
   return getAllAccounts();
+}
+
+export async function sendManualAgentMessage(params: {
+  accountId: string;
+  text: string;
+  toUserId?: string;
+  disableSplit?: boolean;
+}): Promise<{
+  toUserId: string;
+  clientId: string;
+  interrupted: boolean;
+  sentSegments: number;
+  totalSegments: number;
+}> {
+  const account = getAccount(params.accountId);
+  if (!account) {
+    throw new Error(`Account not found: ${params.accountId}`);
+  }
+
+  const text = params.text.trim();
+  if (!text) {
+    throw new Error('Message text must not be empty.');
+  }
+
+  const toUserId = params.toUserId?.trim() || account.user_id;
+  const sendResult = await ilinkSendMessage(
+    {
+      id: account.id,
+      bot_token: account.bot_token,
+      base_url: account.base_url,
+    },
+    toUserId,
+    text,
+    undefined,
+    { disableSplit: params.disableSplit ?? true },
+  );
+
+  if (!sendResult.interrupted) {
+    const botMsg: NewMessage = {
+      id: sendResult.clientId || `manual_${Date.now()}`,
+      account_id: account.id,
+      sender: account.id,
+      sender_name: account.name,
+      content: text,
+      timestamp: new Date().toISOString(),
+      is_from_me: true,
+      is_bot_message: true,
+    };
+    storeMessage(botMsg);
+
+    const nextCompanionState = recordCompanionOutboundTouch({
+      state: ensureCompanionState(account),
+      type: 'sharing',
+      summary: text,
+    });
+    saveCompanionState(nextCompanionState);
+  }
+
+  logger.info(
+    {
+      accountId: account.id,
+      to: toUserId,
+      chars: text.length,
+      interrupted: sendResult.interrupted,
+      sent_segments: sendResult.sentSegments,
+      total_segments: sendResult.totalSegments,
+    },
+    'Manual agent message sent',
+  );
+
+  return {
+    toUserId,
+    clientId: sendResult.clientId,
+    interrupted: sendResult.interrupted,
+    sentSegments: sendResult.sentSegments,
+    totalSegments: sendResult.totalSegments,
+  };
+}
+
+export function createLocalDebugSession(accountId: string): LocalDebugSession {
+  const account = getAccount(accountId);
+  if (!account) {
+    throw new Error(`Account not found: ${accountId}`);
+  }
+
+  const baseState = ensureCompanionState(account);
+  return {
+    accountId: account.id,
+    state: JSON.parse(JSON.stringify(baseState)) as CompanionState,
+    transcript: [],
+  };
+}
+
+export async function runLocalDebugTurn(
+  session: LocalDebugSession,
+  userText: string,
+): Promise<string> {
+  const account = getAccount(session.accountId);
+  if (!account) {
+    throw new Error(`Account not found: ${session.accountId}`);
+  }
+
+  const trimmed = userText.trim();
+  if (!trimmed) {
+    throw new Error('User text must not be empty.');
+  }
+
+  const storedContext = getRecentMessages(account.id, 12)
+    .slice()
+    .reverse()
+    .map((message) => ({
+      is_from_me: message.is_from_me,
+      content: message.content,
+    }));
+  const debugContext = session.transcript.map((turn) => ({
+    is_from_me: turn.role === 'assistant',
+    content: turn.content,
+  }));
+  const recentContext = buildRecentContextFromMessages(
+    [...storedContext, ...debugContext].slice(-20),
+  );
+
+  const response = await generateAgentReply({
+    account,
+    companionState: session.state,
+    latestUserMessage: trimmed,
+    recentContext,
+    isFirstContact: storedContext.length === 0 && session.transcript.length === 0,
+    logScope: { mode: 'local-debug' },
+  });
+
+  session.transcript.push(
+    { role: 'user', content: trimmed },
+    { role: 'assistant', content: response },
+  );
+  session.state = updateCompanionStateAfterTurn({
+    state: session.state,
+    userMessage: trimmed,
+    assistantMessage: response,
+  });
+
+  return response;
 }
 
 // =====================

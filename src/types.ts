@@ -26,6 +26,8 @@ export interface AccountSettings {
   account_id: string;
   persona_id: CompanionPersonaId;
   custom_persona_prompt: string;
+  subscription_expires_at: string;
+  subscription_notice_sent_at: string | null;
   updated_at: string;
 }
 

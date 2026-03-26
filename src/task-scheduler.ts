@@ -21,13 +21,16 @@ import {
 } from './companion-state.js';
 import { runContainerAgent } from './container-runner.js';
 import {
+  ensureAccountSettings,
   getAllAccounts,
   getDueTasks,
   getRecentMessages,
+  getSubscriptionRemainingDays,
   getTaskById,
   getTasksForAccount,
   logTaskRun,
   storeMessage,
+  upsertAccountSettings,
   updateTask,
   updateTaskAfterRun,
 } from './db.js';
@@ -37,6 +40,7 @@ import { NewMessage, ScheduledTask } from './types.js';
 import { getWeatherSummary } from './weather.js';
 
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function scaledHours(baseHours: number): number {
   return Math.max(1, Math.round((baseHours / PROACTIVE_WEIGHT) * 10) / 10);
@@ -333,6 +337,85 @@ async function maybeSendProactiveMessage(accountId: string): Promise<void> {
   );
 }
 
+async function maybeSendSubscriptionExpiryReminder(account: {
+  id: string;
+  name: string;
+  user_id: string;
+  bot_token: string;
+  base_url: string;
+}): Promise<void> {
+  const settings = ensureAccountSettings(account.id);
+  const expiresAt = Date.parse(settings.subscription_expires_at);
+  if (Number.isNaN(expiresAt)) {
+    return;
+  }
+
+  const now = Date.now();
+  const remainingMs = expiresAt - now;
+  if (remainingMs <= 0 || remainingMs > DAY_MS) {
+    return;
+  }
+
+  const noticeWindowStart = expiresAt - DAY_MS;
+  const noticeSentAt = settings.subscription_notice_sent_at
+    ? Date.parse(settings.subscription_notice_sent_at)
+    : Number.NaN;
+
+  if (!Number.isNaN(noticeSentAt) && noticeSentAt >= noticeWindowStart) {
+    return;
+  }
+
+  const remainingDays = getSubscriptionRemainingDays(settings, now);
+  const reminderText =
+    remainingDays <= 1
+      ? '提醒一下，你的订阅时间只剩 1 天了，请及时续费，避免服务中断。'
+      : `提醒一下，你的订阅时间还剩 ${remainingDays} 天，请及时续费。`;
+
+  const sendResult = await ilinkSendMessage(
+    {
+      id: account.id,
+      bot_token: account.bot_token,
+      base_url: account.base_url,
+    },
+    account.user_id,
+    reminderText,
+    undefined,
+    { disableSplit: true },
+  );
+
+  if (sendResult.interrupted) {
+    logger.info(
+      {
+        accountId: account.id,
+        sent_segments: sendResult.sentSegments,
+        total_segments: sendResult.totalSegments,
+      },
+      'Subscription expiry reminder was interrupted by a new inbound message',
+    );
+    return;
+  }
+
+  const botMessage: NewMessage = {
+    id: sendResult.clientId || `subscription_notice_${Date.now()}`,
+    account_id: account.id,
+    sender: account.id,
+    sender_name: account.name,
+    content: reminderText,
+    timestamp: new Date().toISOString(),
+    is_from_me: true,
+    is_bot_message: true,
+  };
+  storeMessage(botMessage);
+  upsertAccountSettings(account.id, {
+    subscription_notice_sent_at: new Date().toISOString(),
+  });
+
+  logger.info(
+    { accountId: account.id, remainingDays, preview: previewText(reminderText) },
+    'Subscription expiry reminder sent',
+  );
+}
+
 async function runTask(task: ScheduledTask): Promise<void> {
   const startTime = Date.now();
 
@@ -513,6 +596,13 @@ export function startSchedulerLoop(): void {
       }
 
       for (const account of getAllAccounts().filter((item) => item.enabled)) {
+        maybeSendSubscriptionExpiryReminder(account).catch((err) => {
+          logger.error(
+            { accountId: account.id, err },
+            'Subscription expiry reminder failed',
+          );
+        });
+
         maybeSendProactiveMessage(account.id).catch((err) => {
           logger.error(
             { accountId: account.id, err },
