@@ -1,13 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 
-import {
-  ensureAccountSettings,
-  getCompanionState,
-  getSubscriptionRemainingDays,
-  initDatabase,
-  upsertAccountSettings,
-} from './db.js';
+import { getCompanionState, initDatabase } from './db.js';
 import {
   addAccount,
   createLocalDebugSession,
@@ -71,10 +65,8 @@ async function cmdList(): Promise<void> {
 
   console.log(`\n当前账号 (${accounts.length}):\n`);
   for (const [index, account] of accounts.entries()) {
-    const settings = ensureAccountSettings(account.id);
-    const remainingDays = getSubscriptionRemainingDays(settings);
     console.log(
-      `  ${index + 1}. [${account.enabled ? '启用' : '停用'}] ${account.name} (${account.id}) -> ${account.user_id} | 剩余订阅 ${remainingDays} 天`,
+      `  ${index + 1}. [${account.enabled ? '启用' : '停用'}] ${account.name} (${account.id}) -> ${account.user_id}`,
     );
   }
   console.log();
@@ -91,19 +83,14 @@ async function cmdState(arg?: string): Promise<void> {
   initDatabase();
   const account = resolveAccountArg(arg);
   const state = getCompanionState(account.id);
-  const settings = ensureAccountSettings(account.id);
-  const remainingDays = getSubscriptionRemainingDays(settings);
 
   if (!state) {
     console.log(`账号 ${account.name} (${account.id}) 还没有 companion state。`);
-    console.log(`订阅剩余天数: ${remainingDays}`);
     return;
   }
 
   console.log(`\n账号: ${account.name} (${account.id})`);
   console.log(`更新时间: ${state.updatedAt}`);
-  console.log(`订阅剩余天数: ${remainingDays}`);
-  console.log(`订阅到期时间: ${settings.subscription_expires_at}`);
   console.log('');
   console.log('【情绪】');
   console.log(
@@ -237,88 +224,6 @@ async function cmdChat(arg?: string): Promise<void> {
   }
 }
 
-async function cmdSubscriptionSet(args: string[]): Promise<void> {
-  initDatabase();
-
-  const accountArg = args[0];
-  const daysArg = args[1];
-  if (!accountArg || !daysArg) {
-    throw new Error('用法: npx tsx src/cli.ts subscription:set <account> <days>');
-  }
-
-  const account = resolveAccountArg(accountArg);
-  const days = Number(daysArg);
-  if (!Number.isFinite(days) || days < 0) {
-    throw new Error('days 必须是大于等于 0 的数字。');
-  }
-
-  const expiresAt = new Date(
-    Date.now() + Math.ceil(days) * 24 * 60 * 60 * 1000,
-  ).toISOString();
-
-  const settings = upsertAccountSettings(account.id, {
-    subscription_expires_at: expiresAt,
-    subscription_notice_sent_at: null,
-  });
-
-  console.log('订阅时间已更新');
-  console.log(`  账号: ${account.name} (${account.id})`);
-  console.log(`  到期时间: ${settings.subscription_expires_at}`);
-  console.log(`  剩余天数: ${getSubscriptionRemainingDays(settings)}`);
-}
-
-async function cmdSubscriptionAdd(args: string[]): Promise<void> {
-  initDatabase();
-
-  const accountArg = args[0];
-  const daysArg = args[1];
-  if (!accountArg || !daysArg) {
-    throw new Error('用法: npx tsx src/cli.ts subscription:add <account> <days>');
-  }
-
-  const account = resolveAccountArg(accountArg);
-  const days = Number(daysArg);
-  if (!Number.isFinite(days) || days <= 0) {
-    throw new Error('days 必须是大于 0 的数字。');
-  }
-
-  const current = ensureAccountSettings(account.id);
-  const currentExpiresAt = Date.parse(current.subscription_expires_at);
-  const baseTime =
-    Number.isNaN(currentExpiresAt) || currentExpiresAt < Date.now()
-      ? Date.now()
-      : currentExpiresAt;
-  const expiresAt = new Date(
-    baseTime + Math.ceil(days) * 24 * 60 * 60 * 1000,
-  ).toISOString();
-
-  const settings = upsertAccountSettings(account.id, {
-    subscription_expires_at: expiresAt,
-    subscription_notice_sent_at: null,
-  });
-
-  console.log('订阅时间已续费');
-  console.log(`  账号: ${account.name} (${account.id})`);
-  console.log(`  新到期时间: ${settings.subscription_expires_at}`);
-  console.log(`  剩余天数: ${getSubscriptionRemainingDays(settings)}`);
-}
-
-async function cmdSubscriptionShow(arg?: string): Promise<void> {
-  initDatabase();
-
-  const account = resolveAccountArg(arg);
-  const settings = ensureAccountSettings(account.id);
-  const remainingDays = getSubscriptionRemainingDays(settings);
-
-  console.log(`账号: ${account.name} (${account.id})`);
-  console.log(`目标用户: ${account.user_id}`);
-  console.log(`剩余订阅天数: ${remainingDays}`);
-  console.log(`到期时间: ${settings.subscription_expires_at}`);
-  console.log(
-    `上次提醒时间: ${settings.subscription_notice_sent_at ?? '未提醒'}`,
-  );
-}
-
 function printHelp(): void {
   console.log(`用法: npx tsx src/cli.ts <command> [arg]
 
@@ -329,9 +234,6 @@ function printHelp(): void {
   state [arg]                   查看 companion state
   send <account> [to] <text>    后台主动发一条 agent 消息
   chat [account]                电脑端本地调试对话，不走 iLink
-  subscription:show [a]         查看账号订阅信息
-  subscription:set <a> <days>   设置账号剩余订阅天数
-  subscription:add <a> <days>   在现有基础上续费增加天数
 `);
 }
 
@@ -356,15 +258,6 @@ switch (cmd) {
     break;
   case 'chat':
     await cmdChat(args[0]);
-    break;
-  case 'subscription:set':
-    await cmdSubscriptionSet(args);
-    break;
-  case 'subscription:add':
-    await cmdSubscriptionAdd(args);
-    break;
-  case 'subscription:show':
-    await cmdSubscriptionShow(args[0]);
     break;
   default:
     printHelp();

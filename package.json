@@ -1,6 +1,6 @@
 {
   "name": "SnowWord",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "SnowWord is a WeChat AI companion runtime with memory, reminders, proactive messaging, and weather-aware extensions.",
   "type": "module",
   "main": "dist/index.js",
@@ -22,10 +22,7 @@
     "account:remove": "tsx src/cli.ts remove",
     "state": "tsx src/cli.ts state",
     "send": "tsx src/cli.ts send",
-    "chat": "tsx src/cli.ts chat",
-    "subscription:show": "tsx src/cli.ts subscription:show",
-    "subscription:set": "tsx src/cli.ts subscription:set",
-    "subscription:add": "tsx src/cli.ts subscription:add"
+    "chat": "tsx src/cli.ts chat"
   },
   "dependencies": {
     "@types/qrcode-terminal": "^0.12.2",

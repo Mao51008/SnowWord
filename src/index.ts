@@ -73,6 +73,7 @@ function previewText(text: string, max = 200): string {
 
 const INSTANCE_LOCK_PATH = path.join(STORE_DIR, 'runtime.lock.json');
 const INBOUND_BATCH_WINDOW_MS = 4000;
+const ACCOUNT_RECONCILE_INTERVAL_MS = 10000;
 let shuttingDown = false;
 
 export interface LocalDebugSession {
@@ -101,6 +102,11 @@ interface ConversationBuffer {
 }
 
 const conversationBuffers = new Map<string, ConversationBuffer>();
+const preparedAccounts = new Set<string>();
+const activeAccountPollers = new Map<
+  string,
+  { stopRequested: boolean; promise: Promise<void> }
+>();
 
 function releaseInstanceLock(): void {
   if (!fs.existsSync(INSTANCE_LOCK_PATH)) return;
@@ -1354,7 +1360,10 @@ export async function runLocalDebugTurn(
 // iLink polling per account
 // =====================
 
-async function startAccountPolling(account: Account): Promise<void> {
+async function startAccountPolling(
+  account: Account,
+  poller: { stopRequested: boolean },
+): Promise<void> {
   if (!account.enabled) {
     logger.debug(
       { accountId: account.id },
@@ -1374,9 +1383,12 @@ async function startAccountPolling(account: Account): Promise<void> {
 
   let buf = account.get_updates_buf ?? '';
 
-  while (true) {
+  while (!poller?.stopRequested) {
     try {
       const resp = await getUpdates(ilinkAccount, buf);
+      if (poller?.stopRequested) {
+        break;
+      }
 
       const isApiError =
         (resp.ret !== undefined && resp.ret !== 0) ||
@@ -1387,6 +1399,9 @@ async function startAccountPolling(account: Account): Promise<void> {
           { ret: resp.ret, errcode: resp.errcode, errmsg: resp.errmsg },
           'getUpdates error',
         );
+        if (poller?.stopRequested) {
+          break;
+        }
         await sleep(5000);
         continue;
       }
@@ -1423,13 +1438,105 @@ async function startAccountPolling(account: Account): Promise<void> {
       }
     } catch (err) {
       log.error({ err }, 'Error in iLink polling loop');
+      if (poller?.stopRequested) {
+        break;
+      }
       await sleep(5000);
     }
   }
+
+  log.info('Stopped iLink long-polling');
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function startAccountPollingIfNeeded(account: Account): void {
+  if (!account.enabled || activeAccountPollers.has(account.id)) {
+    return;
+  }
+
+  const runner = {
+    stopRequested: false,
+    promise: Promise.resolve(),
+  };
+
+  activeAccountPollers.set(account.id, runner);
+
+  runner.promise = startAccountPolling(account, runner)
+    .catch((err) => {
+      logger.error({ accountId: account.id, err }, 'Account polling crashed');
+    })
+    .finally(() => {
+      const current = activeAccountPollers.get(account.id);
+      if (current === runner) {
+        activeAccountPollers.delete(account.id);
+      }
+    });
+
+}
+
+function requestStopAccountPolling(accountId: string): void {
+  const runner = activeAccountPollers.get(accountId);
+  if (!runner || runner.stopRequested) {
+    return;
+  }
+
+  runner.stopRequested = true;
+  logger.info({ accountId }, 'Requested stop for account polling');
+}
+
+function reconcileAccountPollers(): void {
+  const accounts = getAllAccounts();
+  const enabledAccountIds = new Set(
+    accounts.filter((account) => account.enabled).map((account) => account.id),
+  );
+
+  for (const account of accounts) {
+    if (!preparedAccounts.has(account.id)) {
+      ensureDirectories(account.id);
+      ensureSoulFile({
+        soulPath: account.soul_md_path,
+        personaId: getAccountSettings(account.id)?.persona_id ?? 'xiaoxue',
+      });
+      compactStructuredMemories({ account });
+      ensureCompanionState(account);
+      preparedAccounts.add(account.id);
+    }
+
+    if (account.enabled) {
+      startAccountPollingIfNeeded(account);
+    }
+  }
+
+  for (const accountId of activeAccountPollers.keys()) {
+    if (!enabledAccountIds.has(accountId)) {
+      requestStopAccountPolling(accountId);
+    }
+  }
+
+  for (const accountId of preparedAccounts) {
+    if (!accounts.some((account) => account.id === accountId)) {
+      preparedAccounts.delete(accountId);
+    }
+  }
+}
+
+function startAccountPollingManager(): void {
+  logger.info('Account polling manager started');
+
+  const loop = () => {
+    try {
+      reconcileAccountPollers();
+    } catch (err) {
+      logger.error({ err }, 'Account polling reconcile failed');
+    }
+
+    setTimeout(loop, ACCOUNT_RECONCILE_INTERVAL_MS);
+  };
+
+  loop();
 }
 
 // =====================
@@ -1444,29 +1551,12 @@ export async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
 
-  const accounts = getAllAccounts();
-  const enabledAccounts = accounts.filter((a) => a.enabled);
-
-  for (const account of accounts) {
-    ensureDirectories(account.id);
-    ensureSoulFile({
-      soulPath: account.soul_md_path,
-      personaId: getAccountSettings(account.id)?.persona_id ?? 'xiaoxue',
-    });
-    compactStructuredMemories({ account });
-    ensureCompanionState(account);
-  }
-
-  for (const account of enabledAccounts) {
-    startAccountPolling(account).catch((err) => {
-      logger.error({ accountId: account.id, err }, 'Account polling crashed');
-    });
-  }
-
+  reconcileAccountPollers();
   logger.info(
-    { count: enabledAccounts.length },
+    { count: activeAccountPollers.size },
     'iLink polling started for enabled accounts',
   );
+  startAccountPollingManager();
 
   startSchedulerLoop();
 
